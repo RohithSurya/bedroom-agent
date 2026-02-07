@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bedroom-agent"
+version = "0.0.1"
+description = "Bedroom-first edge agent: contracts, policy gate, logging, replay harness."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.6", "pydantic-settings>=2.2", "PyYAML>=6.0.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

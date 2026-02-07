@@ -1,0 +1,16 @@
+name: night_mode_basic
+description: "Presence true + guest_mode false -> allow + set scene + TTS"
+
+initial_state:
+  presence: true
+  guest_mode: false
+
+steps:
+  - request:
+      intent: night_mode
+      args: {}
+    expect:
+      decision: allow
+      action_tools:
+        - light.set_scene
+        - tts.say

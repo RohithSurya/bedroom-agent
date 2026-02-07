@@ -1,0 +1,26 @@
+sequenceDiagram
+  participant User as User
+  participant Siri as HomePod Siri
+  participant HA as Home Assistant
+  participant A as Orchestrator
+  participant P as Policy Gate
+  participant L as JSONL Logger
+
+  User->>Siri: "Hey Siri, Night Mode"
+  Siri->>HA: Trigger Home Scene / Automation
+  HA->>A: webhook/service call: night_mode request
+
+  A->>P: evaluate(request, state, prefs)
+  P-->>A: allow/deny + cooldown + safety_checks
+
+  alt allowed
+    A->>HA: call tools: dim light, set scene, optional AC adjust
+    HA-->>A: tool responses (success + new state)
+    A->>HA: verify state (light level / scene / climate)
+    HA-->>A: verified/failed
+  else denied
+    A-->>HA: no-op (or safe alternative)
+  end
+
+  A->>L: write logs (cid, decisions, actions, latency)
+  A->>HA: speak confirmation via TTS (HomePod)

@@ -1,0 +1,25 @@
+sequenceDiagram
+  participant S as Scheduler (15 min)
+  participant A as Habit Engine
+  participant G as Identity Gate
+  participant H as Heuristics
+  participant V as VLM (rare)
+  participant M as SQLite Metrics
+
+  S->>A: tick
+  A->>G: is_primary_user_present? guest_mode_off? track_me_on?
+  G-->>A: yes/no
+
+  alt gated off
+    A-->>M: no update (or "skipped" count)
+  else gated on
+    A->>H: cheap checks (change-detection)
+    H-->>A: confident state OR uncertain
+
+    alt uncertain or state-changed
+      A->>V: VLM check (bounded rate)
+      V-->>A: state classification
+    end
+
+    A->>M: update derived metrics only
+  end

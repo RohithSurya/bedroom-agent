@@ -1,0 +1,11 @@
+graph LR
+  Events[MQTT + HA events] --> Logs[JSONL Append-only]
+  Logs --> Replay[Replay Harness]
+  Replay --> Reports[Eval Reports]
+
+  Prefs[Preferences] --> SQLite[(SQLite)]
+  Episodes[Episodic Summaries] --> SQLite
+  Metrics[Derived Metrics v1.1] --> SQLite
+
+  SQLite --> Context[Context Packet Builder]
+  Context --> Orchestrator[Orchestrator]

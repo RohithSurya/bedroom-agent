@@ -1,0 +1,43 @@
+graph TD
+  subgraph Edge_Device[Jetson / Edge Host]
+    Orchestrator[Agent Orchestrator]
+    Policy[Policy Gate + Safety]
+    Perception[Always-on Perception: YOLO]
+    State[State Estimator / Belief]
+    Memory[SQLite: prefs + episodic summaries + indexes]
+    Logs[Append-only JSONL logs]
+    Eval[Replay + Eval Harness]
+  end
+
+  subgraph Home[Home Assistant]
+    HA[Home Assistant Core]
+    TTS[HomePod TTS via HA/HomeKit]
+    Scenes[Scenes/Automations: Night Mode, Daily briefing]
+    Climate[SmartIR / Broadlink climate]
+    Zigbee[Zigbee2MQTT devices: mmwave sensors, door sensors, switches]
+  end
+
+  subgraph Bus[Event Bus]
+    MQTT[(Mosquitto MQTT Broker)]
+  end
+
+  Siri[HomePod Siri / Apple Home Scene] --> HA
+  HA --> Orchestrator
+
+  Zigbee --> HA
+  HA <--> MQTT
+
+  MQTT --> Perception
+  Perception --> State
+  State --> Orchestrator
+
+  Orchestrator --> Policy
+  Policy --> Orchestrator
+
+  Orchestrator --> HA
+  HA --> Orchestrator
+
+  Orchestrator --> Memory
+  Orchestrator --> Logs
+  Eval --> Orchestrator
+  Logs --> Eval

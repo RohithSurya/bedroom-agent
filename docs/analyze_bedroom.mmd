@@ -1,0 +1,20 @@
+sequenceDiagram
+  participant HA as Home Assistant
+  participant A as Orchestrator
+  participant Y as YOLO Perception
+  participant V as VLM (on-demand)
+  participant M as SQLite Memory
+  participant L as JSONL Logger
+
+  HA->>A: request: analyze_bedroom
+  A->>Y: get latest detections + snapshot pointer
+  Y-->>A: detections summary
+
+  alt uncertain / needs semantics
+    A->>V: call VLM with snapshot (only now)
+    V-->>A: structured analysis (bed/clothes/desk/etc.)
+  end
+
+  A->>M: store episodic summary + pointers (no raw images by default)
+  A->>L: log decision + outputs
+  A-->>HA: response: concise summary + suggested actions (optional)
