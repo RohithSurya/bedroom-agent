@@ -1,0 +1,15 @@
+name: night_mode_no_presence
+description: "Presence false -> deny + TTS"
+
+initial_state:
+  presence: false
+  guest_mode: false
+
+steps:
+  - request:
+      intent: night_mode
+      args: {}
+    expect:
+      decision: deny
+      action_tools:
+        - tts.say

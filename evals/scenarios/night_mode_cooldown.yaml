@@ -1,0 +1,24 @@
+name: night_mode_cooldown
+description: "Call night_mode twice; second should be denied due to cooldown"
+
+initial_state:
+  presence: true
+  guest_mode: false
+
+steps:
+  - request:
+      intent: night_mode
+      args: {}
+    expect:
+      decision: allow
+      action_tools:
+        - light.set
+        - tts.say
+
+  - request:
+      intent: night_mode
+      args: {}
+    expect:
+      decision: deny
+      action_tools:
+        - tts.say

@@ -1,0 +1,21 @@
+name: night_mode_idempotency
+description: "Simulate retry of first tool call; second execution must be served from cache"
+
+initial_state:
+  presence: true
+  guest_mode: false
+
+steps:
+  - request:
+      intent: night_mode
+      args:
+        entity_id: light.bedroom_lamp
+        brightness_pct: 10
+        transition_s: 1
+    simulate_retry_first_action: true
+    expect:
+      decision: allow
+      action_tools:
+        - light.set
+        - tts.say
+      all_tools_ok: true

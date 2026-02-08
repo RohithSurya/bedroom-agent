@@ -1,0 +1,12 @@
+services:
+  mqtt:
+    image: eclipse-mosquitto:2.0.15
+    ports:
+      - "1883:1883"
+
+  bedroom-agent:
+    build: .
+    depends_on:
+      - mqtt
+    env_file:
+      - .env

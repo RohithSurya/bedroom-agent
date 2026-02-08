@@ -6,14 +6,15 @@ from typing import Any
 
 import yaml
 
-# Make `src/` importable without messing with env vars
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from agent.orchestrator import Orchestrator  # noqa: E402
+from agent.runner import Runner  # noqa: E402
 from core.config import Settings  # noqa: E402
 from core.logging_jsonl import JsonlLogger  # noqa: E402
+from tools.tool_executor import ToolExecutor  # noqa: E402
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -24,7 +25,10 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 def run_scenario(path: Path) -> int:
     cfg = Settings()
     logger = JsonlLogger(log_dir=cfg.LOG_DIR, tz_name=cfg.TIMEZONE)
+
     orch = Orchestrator()
+    executor = ToolExecutor(mode=cfg.AGENT_MODE)
+    runner = Runner(executor=executor, logger=logger, retry_attempts=1)
 
     scenario = _load_yaml(path)
     state = dict(scenario.get("initial_state", {}))
@@ -39,6 +43,15 @@ def run_scenario(path: Path) -> int:
         intent = req.get("intent", "")
         args = req.get("args", {})
 
+        # Optional failure injection for this step
+        for inj in step.get("failure_injection", []) or []:
+            executor.inject_failure(
+                tool=str(inj.get("tool")),
+                times=int(inj.get("times", 1)),
+                error=str(inj.get("error", "simulated_error")),
+                cache_failures=bool(inj.get("cache_failures", False)),
+            )
+
         out = orch.handle_request(intent=intent, args=args, state=state)
         cid = out["correlation_id"]
         decision = out["decision"]
@@ -50,9 +63,7 @@ def run_scenario(path: Path) -> int:
             payload={"intent": intent, "args": args, "state": state},
         )
         logger.write(
-            correlation_id=cid,
-            event_type="policy_decision",
-            payload=decision.model_dump(),
+            correlation_id=cid, event_type="policy_decision", payload=decision.model_dump()
         )
         logger.write(
             correlation_id=cid,
@@ -60,11 +71,15 @@ def run_scenario(path: Path) -> int:
             payload={"actions": [a.model_dump() for a in actions]},
         )
 
-        got_decision = decision.decision
+        run_out = runner.execute_actions(correlation_id=cid, actions=actions)
+
+        # Assertions
         want_decision = exp.get("decision")
-        if want_decision and got_decision != want_decision:
+        if want_decision and decision.decision != want_decision:
             failures += 1
-            print(f"  ❌ Step {idx}: decision mismatch: got={got_decision} want={want_decision}")
+            print(
+                f"  ❌ Step {idx}: decision mismatch: got={decision.decision} want={want_decision}"
+            )
 
         want_tools = exp.get("action_tools", [])
         got_tools = [a.tool for a in actions]
@@ -73,8 +88,16 @@ def run_scenario(path: Path) -> int:
                 failures += 1
                 print(f"  ❌ Step {idx}: missing expected tool: {t}")
 
+        if "final_success" in exp and bool(run_out["success"]) != bool(exp["final_success"]):
+            failures += 1
+            print(
+                f"  ❌ Step {idx}: final_success mismatch: got={run_out['success']} want={exp['final_success']}"
+            )
+
         if failures == 0:
-            print(f"  ✅ Step {idx}: ok (decision={got_decision}, tools={got_tools})")
+            print(
+                f"  ✅ Step {idx}: ok (mode={cfg.AGENT_MODE}, decision={decision.decision}, final_success={run_out['success']})"
+            )
 
     print(f"Result: {'PASS' if failures == 0 else 'FAIL'} (failures={failures})")
     print(f"Logs: {cfg.LOG_DIR}/events.jsonl")

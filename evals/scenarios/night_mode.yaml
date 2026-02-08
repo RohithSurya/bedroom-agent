@@ -1,5 +1,5 @@
 name: night_mode_basic
-description: "Presence true + guest_mode false -> allow + set scene + TTS"
+description: "Presence true + guest_mode false -> allow + dim lights + TTS"
 
 initial_state:
   presence: true
@@ -12,5 +12,5 @@ steps:
     expect:
       decision: allow
       action_tools:
-        - light.set_scene
+        - light.set
         - tts.say

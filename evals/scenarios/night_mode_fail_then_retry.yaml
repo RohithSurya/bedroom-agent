@@ -1,0 +1,24 @@
+name: night_mode_fail_then_retry
+description: "light.set fails once (injected), runner retries once, then succeeds"
+
+initial_state:
+  presence: true
+  guest_mode: false
+
+steps:
+  - request:
+      intent: night_mode
+      args:
+        entity_id: light.bedroom_lamp
+        brightness_pct: 12
+        transition_s: 1
+    failure_injection:
+      - tool: light.set
+        times: 1
+        error: simulated_timeout
+    expect:
+      decision: allow
+      action_tools:
+        - light.set
+        - tts.say
+      final_success: true

@@ -1,0 +1,21 @@
+name: night_mode_hard_fail
+description: "light.set fails twice, only 1 retry allowed -> fallback TTS + final_success false"
+
+initial_state:
+  presence: true
+  guest_mode: false
+
+steps:
+  - request:
+      intent: night_mode
+      args:
+        entity_id: light.bedroom_lamp
+        brightness_pct: 10
+        transition_s: 1
+    failure_injection:
+      - tool: light.set
+        times: 2
+        error: simulated_timeout
+    expect:
+      decision: allow
+      final_success: false
