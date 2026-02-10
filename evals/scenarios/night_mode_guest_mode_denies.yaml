@@ -1,0 +1,16 @@
+name: night_mode_guest_mode_denies
+description: "Guest mode ON denies night mode"
+
+initial_state:
+  presence: true
+  guest_mode: true
+
+steps:
+  - request:
+      intent: night_mode
+      args: {}
+    expect:
+      decision: deny
+      reason_contains: guest_mode_on
+      not_action_tools: [light.set]
+      final_success: true

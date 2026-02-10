@@ -1,0 +1,26 @@
+name: night_mode_cooldown_tts_failure_optional
+description: "Cooldown denial path with injected TTS failure (decide whether final_success should be false)"
+
+initial_state:
+  presence: true
+  guest_mode: false
+
+steps:
+  - request:
+      intent: night_mode
+      args: {}
+    expect:
+      decision: allow
+      final_success: true
+
+  - request:
+      intent: night_mode
+      args: {}
+    failure_injection:
+      - tool: tts.say
+        times: 1
+        error: simulated_tts_down
+    expect:
+      decision: deny
+      # You choose whether to keep true or make false after we tighten Runner
+      final_success: true

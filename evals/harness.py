@@ -15,6 +15,7 @@ from agent.runner import Runner  # noqa: E402
 from core.config import Settings  # noqa: E402
 from core.logging_jsonl import JsonlLogger  # noqa: E402
 from tools.tool_executor import ToolExecutor  # noqa: E402
+from core.cooldowns import CooldownStore  # noqa: E402
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -25,10 +26,19 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 def run_scenario(path: Path) -> int:
     cfg = Settings()
     logger = JsonlLogger(log_dir=cfg.LOG_DIR, tz_name=cfg.TIMEZONE)
+    cooldowns = CooldownStore()
+    orch = Orchestrator(cooldowns=cooldowns)
 
-    orch = Orchestrator()
-    executor = ToolExecutor(mode=cfg.AGENT_MODE)
-    runner = Runner(executor=executor, logger=logger, retry_attempts=1)
+    if cfg.TOOL_BACKEND == "http":
+        from tools.ha_http_client import HAToolClientHTTP
+
+        executor = HAToolClientHTTP(base_url=cfg.HA_BASE_URL, mode=cfg.AGENT_MODE)
+    else:
+        from tools.tool_executor import ToolExecutor
+
+        executor = ToolExecutor(mode=cfg.AGENT_MODE)
+
+    runner = Runner(executor=executor, cooldowns=cooldowns, logger=logger, retry_attempts=1)
 
     scenario = _load_yaml(path)
     state = dict(scenario.get("initial_state", {}))
@@ -45,17 +55,38 @@ def run_scenario(path: Path) -> int:
 
         # Optional failure injection for this step
         for inj in step.get("failure_injection", []) or []:
-            executor.inject_failure(
-                tool=str(inj.get("tool")),
-                times=int(inj.get("times", 1)),
-                error=str(inj.get("error", "simulated_error")),
-                cache_failures=bool(inj.get("cache_failures", False)),
-            )
+            tool = str(inj.get("tool"))
+            times = int(inj.get("times", 1))
+            error = str(inj.get("error", "simulated_error"))
+
+            # both backends support inject_failure, but signatures differ slightly
+            if hasattr(executor, "inject_failure"):
+                try:
+                    executor.inject_failure(
+                        tool=tool, times=times, error=error
+                    )  # http client style
+                except TypeError:
+                    executor.inject_failure(
+                        tool=tool, times=times, error=error, cache_failures=False
+                    )  # ToolExecutor style
+
+        if "state_update" in step and isinstance(step["state_update"], dict):
+            state.update(step["state_update"])
 
         out = orch.handle_request(intent=intent, args=args, state=state)
+
         cid = out["correlation_id"]
         decision = out["decision"]
         actions = out["actions"]
+        cooldown_key = out.get("cooldown_key")
+        cooldown_seconds = out.get("cooldown_seconds", 0)
+
+        reason_contains = exp.get("reason_contains")
+        if reason_contains and reason_contains not in decision.reason:
+            failures += 1
+            print(
+                f"  ❌ Step {idx}: reason mismatch: got={decision.reason} want_contains={reason_contains}"
+            )
 
         logger.write(
             correlation_id=cid,
@@ -71,7 +102,12 @@ def run_scenario(path: Path) -> int:
             payload={"actions": [a.model_dump() for a in actions]},
         )
 
-        run_out = runner.execute_actions(correlation_id=cid, actions=actions)
+        run_out = runner.execute_actions(
+            correlation_id=cid,
+            actions=actions,
+            cooldown_key=cooldown_key,
+            cooldown_seconds=cooldown_seconds,
+        )
 
         # Assertions
         want_decision = exp.get("decision")
@@ -87,6 +123,12 @@ def run_scenario(path: Path) -> int:
             if t not in got_tools:
                 failures += 1
                 print(f"  ❌ Step {idx}: missing expected tool: {t}")
+
+        not_tools = exp.get("not_action_tools", [])
+        for t in not_tools:
+            if t in got_tools:
+                failures += 1
+                print(f"  ❌ Step {idx}: tool should NOT be planned: {t}")
 
         if "final_success" in exp and bool(run_out["success"]) != bool(exp["final_success"]):
             failures += 1

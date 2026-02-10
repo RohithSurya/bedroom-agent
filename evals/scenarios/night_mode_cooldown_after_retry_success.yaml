@@ -1,0 +1,30 @@
+name: night_mode_cooldown_after_retry_success
+description: "First call light fails once then succeeds on retry; second call denied due cooldown"
+
+initial_state:
+  presence: true
+  guest_mode: false
+
+steps:
+  - request:
+      intent: night_mode
+      args:
+        entity_id: light.bedroom_lamp
+        brightness_pct: 12
+        transition_s: 1
+    failure_injection:
+      - tool: light.set
+        times: 1
+        error: simulated_timeout
+    expect:
+      decision: allow
+      final_success: true
+
+  - request:
+      intent: night_mode
+      args: {}
+    expect:
+      decision: deny
+      reason_contains: cooldown_active
+      not_action_tools: [light.set]
+      final_success: true

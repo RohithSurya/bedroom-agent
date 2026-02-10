@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from contracts.ha import ToolCall, ToolResult
+from core.cooldowns import CooldownStore
 from core.ids import new_idempotency_key
 from core.logging_jsonl import JsonlLogger
 from tools.tool_executor import ToolExecutor
@@ -12,6 +13,7 @@ from tools.tool_executor import ToolExecutor
 @dataclass
 class Runner:
     executor: ToolExecutor
+    cooldowns: CooldownStore
     logger: JsonlLogger
     retry_attempts: int = 1  # v0 default
 
@@ -25,26 +27,30 @@ class Runner:
             }
 
         if call.tool == "light.set":
+            state = self.executor.get_state()
             entity_id = str(call.args.get("entity_id", "light.bedroom_lamp"))
             want = int(call.args.get("brightness_pct", 15))
-            got = int(
-                self.executor.device_state["lights"].get(entity_id, {}).get("brightness_pct", -1)
-            )
+            got = int(state.get("lights", {}).get(entity_id, {}).get("brightness_pct", -1))
             verified = bool(result.ok) and (got == want)
             return {"verified": verified, "entity_id": entity_id, "want": want, "got": got}
 
         if call.tool == "tts.say":
+            state = self.executor.get_state()
             msg = str(call.args.get("message", ""))
-            verified = (
-                bool(result.ok)
-                and (len(self.executor.device_state["tts"]) > 0)
-                and (self.executor.device_state["tts"][-1] == msg)
-            )
+            tts = state.get("tts", [])
+            verified = bool(result.ok) and (len(tts) > 0) and (tts[-1] == msg)
             return {"verified": verified, "message": msg}
 
         return {"verified": bool(result.ok), "note": "no verifier for tool"}
 
-    def execute_actions(self, *, correlation_id: str, actions: list[ToolCall]) -> dict[str, Any]:
+    def execute_actions(
+        self,
+        *,
+        correlation_id: str,
+        actions: list[ToolCall],
+        cooldown_key: str,
+        cooldown_seconds: int,
+    ) -> dict[str, Any]:
         failures: list[dict[str, Any]] = []
         executed_tools: list[str] = []
         light_ok = True
@@ -123,6 +129,14 @@ class Runner:
 
         success = len(failures) == 0
 
+        mode = getattr(self.executor, "mode", "active")
+        if success and mode == "active" and cooldown_key and cooldown_seconds > 0:
+            self.cooldowns.mark_ran(cooldown_key, cooldown_seconds)
+            self.logger.write(
+                correlation_id=correlation_id,
+                event_type="cooldown_marked",
+                payload={"key": cooldown_key, "seconds": cooldown_seconds},
+            )
         self.logger.write(
             correlation_id=correlation_id,
             event_type="final_outcome",

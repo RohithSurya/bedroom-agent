@@ -32,6 +32,9 @@ class ToolExecutor:
     # tool -> {"remaining": int, "error": str, "cache_failures": bool}
     failure_plan: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
+    def get_state(self) -> dict:
+        return self.device_state
+
     def inject_failure(
         self,
         *,

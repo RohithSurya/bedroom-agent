@@ -1,0 +1,24 @@
+name: night_mode_guest_mode_overrides_cooldown
+description: "First call sets cooldown; second call guest_mode ON should deny due guest_mode (not cooldown)"
+
+initial_state:
+  presence: true
+  guest_mode: false
+
+steps:
+  - request:
+      intent: night_mode
+      args: {}
+    expect:
+      decision: allow
+      final_success: true
+
+  - state_update:
+      guest_mode: true
+    request:
+      intent: night_mode
+      args: {}
+    expect:
+      decision: deny
+      not_action_tools: [light.set]
+      final_success: true
