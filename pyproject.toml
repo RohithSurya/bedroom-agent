@@ -7,7 +7,7 @@ name = "bedroom-agent"
 version = "0.0.1"
 description = "Bedroom-first edge agent: contracts, policy gate, logging, replay harness."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
