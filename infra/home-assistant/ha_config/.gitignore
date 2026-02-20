@@ -1,0 +1,24 @@
+# Ignore everything in HA config by default
+*
+
+# But keep these tracked
+!.gitignore
+!configuration.yaml
+!automations.yaml
+!scripts.yaml
+!scenes.yaml
+!groups.yaml
+!packages/**
+!blueprints/**
+!custom_components/**
+!www/**
+
+# Never commit secrets or runtime state
+secrets.yaml
+.storage/
+home-assistant_v2.db*
+home-assistant.log*
+backups/
+tts/
+media/
+.cloud/

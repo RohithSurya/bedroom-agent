@@ -1,0 +1,6 @@
+services:
+
+  ha-mock:
+    build: ./mock_ha
+    ports:
+      - "8123:8123"

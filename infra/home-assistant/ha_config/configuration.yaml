@@ -1,0 +1,38 @@
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+python_script:
+
+rest_command:
+  bedroom_agent_run:
+    url: "http://10.0.0.179:9000/agent/run"
+    method: POST
+    timeout: 10
+    content_type: "application/json"
+    payload: >
+      {
+        "intent": "{{ intent }}",
+        "args": {{ args | default({}) | tojson }},
+        "state": {{ state | default({}) | tojson }}
+      }
+
+
+template:
+  - fan:
+      - name: "Bedroom Fan"
+        unique_id: bedroom_fan_agent
+        # Use the real plug state for display (or keep it optimistic if you prefer)
+        state: "{{ is_state('switch.bedroom_fan_plug', 'on') }}"
+        turn_on:
+          service: script.agent_fan_on_request
+        turn_off:
+          service: script.agent_fan_off_request
+

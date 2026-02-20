@@ -1,0 +1,102 @@
+agent_fan_on_request:
+  alias: Agent Fan On Request
+  mode: single
+  sequence:
+  - service: rest_command.bedroom_agent_run
+    data:
+      intent: fan_on
+      args:
+        entity_id: switch.bedroom_fan_plug
+      state:
+        presence: true
+        guest_mode: '{{ states(''input_boolean.guest_mode'') == ''on'' }}'
+    response_variable: resp
+  - variables:
+      body: "{% if resp.content is mapping %}\n  {{ resp.content }}\n{% else %}\n
+        \ {{ resp.content | from_json }}\n{% endif %}\n"
+      decision: '{{ (body.decision.decision | default('''')) | lower }}'
+  - choose:
+    - conditions: '{{ resp.status != 200 or decision == ''deny'' }}'
+      sequence:
+      - service: python_script.touch_entity
+        data:
+          entity_id: fan.bedroom_fan
+      - service: python_script.touch_entity
+        data:
+          entity_id: switch.bedroom_fan_plug
+      - stop: Denied by agent policy
+        error: true
+agent_fan_off_request:
+  alias: Agent Fan Off Request
+  mode: single
+  sequence:
+  - data:
+      intent: fan_off
+      args:
+        entity_id: switch.bedroom_fan_plug
+      state:
+        presence: true
+        guest_mode: '{{ is_state(''input_boolean.guest_mode'', ''on'') }}'
+    response_variable: resp
+    action: rest_command.bedroom_agent_run
+  - variables:
+      body: "{% if resp.content is mapping %}\n  {{ resp.content }}\n{% else %}\n
+        \ {{ resp.content | from_json }}\n{% endif %}\n"
+      decision: '{{ (body.decision.decision | default('''')) | lower }}'
+      reason: '{{ body.decision.reason | default('''') }}'
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ resp.status != 200 or decision == ''deny'' }}'
+      sequence:
+      - data:
+          entity_id: fan.bedroom_fan
+        action: python_script.touch_entity
+      - data:
+          entity_id: switch.bedroom_fan_plug
+        action: python_script.touch_entity
+      - stop: 'Denied by agent: {{ reason }}'
+        error: true
+  description: ''
+bedroom_agent_speak:
+  alias: Bedroom Agent Speak
+  mode: queued
+  fields:
+    message:
+      description: Text to speak
+      example: Fan on.
+    volume_level:
+      description: Temporary volume 0..1
+      example: 0.9
+  variables:
+    player: media_player.main_bedroom
+    prev_vol: '{{ state_attr(player, ''volume_level'') }}'
+    vol: '{{ volume_level | default(0.9) }}'
+    words: '{{ message.split() | count }}'
+    est_speech_s: '{{ (words / 2.6) + 1.0 }}'
+    restore_delay_s: "{{ [ 12,\n     [ 2.5, est_speech_s ] | max\n   ] | min | round(0)
+      | int }}\n"
+  sequence:
+  - service: media_player.volume_set
+    target:
+      entity_id: '{{ player }}'
+    data:
+      volume_level: '{{ vol }}'
+  - service: tts.speak
+    target:
+      entity_id: tts.google_translate_en_com
+    data:
+      media_player_entity_id: '{{ player }}'
+      message: '{{ message }}'
+      cache: true
+      options:
+        preferred_format: mp3
+  - delay: '{{ restore_delay_s }}'
+  - choose:
+    - conditions: '{{ prev_vol is not none }}'
+      sequence:
+      - service: media_player.volume_set
+        target:
+          entity_id: '{{ player }}'
+        data:
+          volume_level: '{{ prev_vol }}'
