@@ -10,7 +10,7 @@ from core.idempotency import IdempotencyStore
 class HAToolClientHTTP:
     base_url: str = "http://localhost:8123"
     mode: str = "active"  # <-- ADD THIS
-    timeout_s: float = 5.0
+    timeout_s: float = 20
     idempotency: IdempotencyStore = field(default_factory=IdempotencyStore)
 
     def _url(self, path: str) -> str:

@@ -17,9 +17,43 @@ class Runner:
     logger: JsonlLogger
     retry_attempts: int = 1  # v0 default
 
+    def _read_entity_state(self, entity_id: str) -> dict[str, Any]:
+        """
+        Returns an HA-like entity state dict:
+        - HA backend: real /api/states/<entity_id> shape (state + attributes)
+        - local backend: synthesized to match the same interface
+        """
+        # Real HA backend
+        if hasattr(self.executor, "read_entity_state"):
+            return self.executor.read_entity_state(entity_id)
+
+        # Local backend (ToolExecutor)
+        s = self.executor.get_state()
+
+        if entity_id.startswith("switch."):
+            return {
+                "entity_id": entity_id,
+                "state": s.get("switches", {}).get(entity_id, {}).get("state", "unknown"),
+                "attributes": {},
+            }
+
+        if entity_id.startswith("light."):
+            attrs = dict(s.get("lights", {}).get(entity_id, {}))
+            # keep any local brightness_pct
+            # also provide HA-style brightness (0-255) if we can
+            if "brightness" not in attrs and "brightness_pct" in attrs:
+                try:
+                    attrs["brightness"] = round(int(attrs["brightness_pct"]) * 255 / 100)
+                except Exception:
+                    pass
+            # Local mock doesn't track on/off; assume on when set is called
+            return {"entity_id": entity_id, "state": "on", "attributes": attrs}
+
+        return {"entity_id": entity_id, "state": "unknown", "attributes": {}}
+
     def _verify(self, call: ToolCall, result: ToolResult) -> dict[str, Any]:
-        # In shadow mode, we can only verify "the call succeeded" logically
-        if self.executor.mode == "shadow":
+        mode = getattr(self.executor, "mode", "active")
+        if mode == "shadow":
             return {
                 "verified": bool(result.ok),
                 "mode": "shadow",
@@ -27,19 +61,63 @@ class Runner:
             }
 
         if call.tool == "light.set":
-            state = self.executor.get_state()
             entity_id = str(call.args.get("entity_id", "light.bedroom_lamp"))
-            want = int(call.args.get("brightness_pct", 15))
-            got = int(state.get("lights", {}).get(entity_id, {}).get("brightness_pct", -1))
+            want_pct = int(call.args.get("brightness_pct", 15))
+
+            ent = self._read_entity_state(entity_id)
+            attrs = ent.get("attributes", {}) or {}
+
+            got_pct = None
+
+            # HA: attributes.brightness is 0-255
+            if "brightness" in attrs and attrs["brightness"] is not None:
+                try:
+                    got_pct = round((int(attrs["brightness"]) * 100) / 255)
+                except Exception:
+                    got_pct = None
+
+            # Local mock: may store brightness_pct directly
+            if got_pct is None and "brightness_pct" in attrs:
+                try:
+                    got_pct = int(attrs["brightness_pct"])
+                except Exception:
+                    got_pct = None
+
+            verified = bool(result.ok) and (got_pct is not None) and (abs(got_pct - want_pct) <= 2)
+            return {
+                "verified": verified,
+                "entity_id": entity_id,
+                "want_pct": want_pct,
+                "got_pct": got_pct,
+                "raw_state": ent.get("state"),
+            }
+
+        if call.tool == "switch.set":
+            entity_id = str(call.args.get("entity_id", "switch.bedroom_fan_plug"))
+            want = str(call.args.get("state", "")).lower()
+
+            ent = self._read_entity_state(entity_id)
+            got = str(ent.get("state", "")).lower()
+
             verified = bool(result.ok) and (got == want)
             return {"verified": verified, "entity_id": entity_id, "want": want, "got": got}
 
         if call.tool == "tts.say":
-            state = self.executor.get_state()
             msg = str(call.args.get("message", ""))
-            tts = state.get("tts", [])
-            verified = bool(result.ok) and (len(tts) > 0) and (tts[-1] == msg)
-            return {"verified": verified, "message": msg}
+
+            # Local ToolExecutor tracks tts list
+            if not hasattr(self.executor, "read_entity_state"):
+                state = self.executor.get_state()
+                tts = state.get("tts", [])
+                verified = bool(result.ok) and (len(tts) > 0) and (tts[-1] == msg)
+                return {"verified": verified, "message": msg}
+
+            # Real HA backend: unless you wire TTS to a verifiable entity, treat as best-effort
+            return {
+                "verified": bool(result.ok),
+                "message": msg,
+                "note": "no_state_verifier_for_tts_backend",
+            }
 
         return {"verified": bool(result.ok), "note": "no verifier for tool"}
 
@@ -48,7 +126,7 @@ class Runner:
         *,
         correlation_id: str,
         actions: list[ToolCall],
-        cooldown_key: str,
+        cooldown_key: str | None,
         cooldown_seconds: int,
     ) -> dict[str, Any]:
         failures: list[dict[str, Any]] = []
@@ -63,6 +141,7 @@ class Runner:
                     continue
 
             # Execute + log
+            print(f"Executing tool: {call.tool} with args {call.args}")  # for visibility in logs
             result = self.executor.execute(call)
             executed_tools.append(call.tool)
             self.logger.write(

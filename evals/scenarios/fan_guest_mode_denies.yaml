@@ -1,0 +1,17 @@
+name: fan_guest_mode_denies
+description: "Guest mode ON should deny fan power control"
+
+initial_state:
+  presence: true
+  guest_mode: true
+
+steps:
+  - request:
+      intent: fan_on
+      args:
+        entity_id: switch.bedroom_fan_plug
+    expect:
+      decision: deny
+      reason_contains: guest_mode_on
+      not_action_tools: [switch.set]
+      final_success: true

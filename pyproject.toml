@@ -13,10 +13,13 @@ dependencies = [
     "pydantic-settings>=2.2",
     "PyYAML>=6.0.1",
     "requests>=2.31",
+    "fastapi>=0.110,<1.0",
+    "uvicorn[standard]>=0.27,<1.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.5"]
+mock_ha = ["fastapi==0.110.0", "uvicorn[standard]==0.27.1"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

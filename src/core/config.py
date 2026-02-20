@@ -10,5 +10,6 @@ class Settings(BaseSettings):
     LOG_DIR: str = "logs"
     AGENT_MODE: str = "shadow"  # "shadow" or "active"
 
-    TOOL_BACKEND: str = "local"  # "local" or "http"
+    TOOL_BACKEND: str = "ha"  # "local" or "http" or "ha" (real Home Assistant client)
     HA_BASE_URL: str = "http://localhost:8123"
+    HA_TOKEN: str = ""

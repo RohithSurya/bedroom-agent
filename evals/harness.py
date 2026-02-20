@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from tools.ha_real_client import HAToolClientReal
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
 sys.path.insert(0, str(SRC))
@@ -33,10 +35,12 @@ def run_scenario(path: Path) -> int:
         from tools.ha_http_client import HAToolClientHTTP
 
         executor = HAToolClientHTTP(base_url=cfg.HA_BASE_URL, mode=cfg.AGENT_MODE)
-    else:
+    elif cfg.TOOL_BACKEND == "ha":
         from tools.tool_executor import ToolExecutor
-
         executor = ToolExecutor(mode=cfg.AGENT_MODE)
+    else:
+        executor = HAToolClientReal(base_url=cfg.HA_BASE_URL, token=cfg.HA_TOKEN)
+
 
     runner = Runner(executor=executor, cooldowns=cooldowns, logger=logger, retry_attempts=1)
 

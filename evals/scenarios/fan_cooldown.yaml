@@ -1,0 +1,25 @@
+name: fan_cooldown
+description: "Fan ON succeeds then immediate retry denied by cooldown"
+
+initial_state:
+  presence: true
+  guest_mode: false
+
+steps:
+  - request:
+      intent: fan_on
+      args:
+        entity_id: switch.bedroom_fan_plug
+    expect:
+      decision: allow
+      final_success: true
+
+  - request:
+      intent: fan_on
+      args:
+        entity_id: switch.bedroom_fan_plug
+    expect:
+      decision: deny
+      reason_contains: cooldown_active
+      not_action_tools: [switch.set]
+      final_success: true

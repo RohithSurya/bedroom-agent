@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from contracts.ha import ToolCall, ToolResult
 from core.idempotency import IdempotencyStore
+from core.logging_jsonl import JsonlLogger
 
 
 @dataclass
@@ -18,12 +19,14 @@ class ToolExecutor:
     """
 
     mode: str  # "shadow" or "active"
+    logger: JsonlLogger
     idempotency: IdempotencyStore = field(default_factory=IdempotencyStore)
 
     device_state: Dict[str, Any] = field(
         default_factory=lambda: {
             "lights": {"light.bedroom_lamp": {"brightness_pct": 100}},
             "tts": [],
+            "switches": {"switch.bedroom_fan_plug": {"state": "off"}},
         }
     )
 
@@ -124,6 +127,22 @@ class ToolExecutor:
             msg = str(call.args.get("message", ""))
             self.device_state["tts"].append(msg)
             result = ToolResult(ok=True, tool=call.tool, details={"cached": False, "message": msg})
+
+        elif call.tool == "switch.set":
+            entity_id = str(call.args.get("entity_id"))
+            state = str(call.args.get("state", "off")).lower()
+            if state not in ("on", "off"):
+                result = ToolResult(
+                    ok=False, tool=call.tool, details={"error": "invalid_state", "state": state}
+                )
+            else:
+                self.device_state["switches"].setdefault(entity_id, {})
+                self.device_state["switches"][entity_id]["state"] = state
+                result = ToolResult(
+                    ok=True,
+                    tool=call.tool,
+                    details={"entity_id": entity_id, "state": state},
+                )
 
         else:
             result = ToolResult(

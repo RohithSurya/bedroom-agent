@@ -6,6 +6,7 @@ from contracts.ha import ToolCall
 from contracts.policy import PolicyDecision
 from core.ids import new_correlation_id, new_idempotency_key
 from agent.policies import evaluate_night_mode
+from agent.policies import evaluate_fan_power
 from core.cooldowns import CooldownStore
 
 
@@ -80,21 +81,77 @@ class Orchestrator:
                 "cooldown_seconds": cooldown_seconds,
                 "cooldown_key": cooldown_key,
             }
+        if intent in ("fan_on", "fan_off"):
+            decision = evaluate_fan_power(state)
+            actions: list[ToolCall] = []
 
-        decision = PolicyDecision(decision="deny", reason=f"unknown_intent:{intent}")
+            entity_id = args.get("entity_id", "switch.bedroom_fan_plug")
+            desired = "on" if intent == "fan_on" else "off"
+
+            # Cooldown key per-device + per-intent family
+            cooldown_key = f"intent:fan_power:entity:{entity_id}"
+            cooldown_seconds = decision.cooldown_seconds
+
+            # cooldown check (read-only here)
+            if decision.decision == "allow" and cooldown_seconds > 0:
+                ok, remaining = self.cooldowns.can_run(cooldown_key, cooldown_seconds)
+                if not ok:
+                    decision = PolicyDecision(
+                        decision="deny",
+                        reason=f"cooldown_active:{remaining}s_remaining",
+                        cooldown_seconds=cooldown_seconds,
+                        safety_checks=decision.safety_checks + ["cooldown"],
+                    )
+
+            if decision.decision == "allow":
+                actions.append(
+                    ToolCall(
+                        tool="switch.set",
+                        args={"entity_id": entity_id, "state": desired},
+                        idempotency_key=new_idempotency_key(),
+                        correlation_id=cid,
+                    )
+                )
+                actions.append(
+                    ToolCall(
+                        tool="tts.say",
+                        args={"message": f"Fan {desired}."},
+                        idempotency_key=new_idempotency_key(),
+                        correlation_id=cid,
+                    )
+                )
+            else:
+                actions.append(
+                    ToolCall(
+                        tool="tts.say",
+                        args={"message": "cool down"},
+                        idempotency_key=new_idempotency_key(),
+                        correlation_id=cid,
+                    )
+                )
+
+            return {
+                "correlation_id": cid,
+                "decision": decision,
+                "actions": actions,
+                "cooldown_key": cooldown_key,
+                "cooldown_seconds": cooldown_seconds,
+            }
+
+        actions.append(
+            ToolCall(
+                tool="tts.say",
+                args={"message": f"Fan request blocked: {_humanize_reason(decision.reason)}"},
+                idempotency_key=new_idempotency_key(),
+                correlation_id=cid,
+            )
+        )
         return {
             "correlation_id": cid,
             "decision": decision,
+            "actions": actions,
             "cooldown_key": None,
             "cooldown_seconds": 0,
-            "actions": [
-                ToolCall(
-                    tool="tts.say",
-                    args={"message": "Sorry, I don't recognize that request yet."},
-                    idempotency_key=new_idempotency_key(),
-                    correlation_id=cid,
-                )
-            ],
         }
 
 

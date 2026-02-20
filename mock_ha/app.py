@@ -87,3 +87,23 @@ def tool_tts(req: ToolRequest):
     msg = str(req.args.get("message", ""))
     STATE["tts"].append(msg)
     return {"ok": True, "tool": "tts.say", "details": {"message": msg}}
+
+
+@app.post("/tool/switch.set")
+def tool_switch_set(req: ToolRequest):
+    injected = maybe_fail("switch.set")
+    if injected:
+        return injected
+
+    entity_id = str(req.args.get("entity_id"))
+    state = str(req.args.get("state", "off")).lower()
+    if state not in ("on", "off"):
+        return {"ok": False, "tool": "switch.set", "details": {"error": "invalid_state", "state": state}}
+
+    STATE["switches"].setdefault(entity_id, {})
+    STATE["switches"][entity_id]["state"] = state
+    return {
+        "ok": True,
+        "tool": "switch.set",
+        "details": {"entity_id": entity_id, "state": state},
+    }
