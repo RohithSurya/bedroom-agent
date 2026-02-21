@@ -1,0 +1,18 @@
+homeassistant:
+  enabled: true
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://localhost:1883
+serial:
+  port: /dev/ttyACM0
+  adapter: ember
+  baudrate: 460800
+  rtscts: true
+frontend:
+  enabled: true
+advanced:
+  channel: 25
+version: 5
+devices:
+  '0x4ce175525d050000':
+    friendly_name: bedroom_fan_plug

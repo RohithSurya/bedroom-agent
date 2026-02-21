@@ -1,0 +1,12 @@
+# Zigbee2MQTT runtime/state (never commit)
+database.db
+state.json
+secret.yaml
+coordinator_backup*
+log/
+*.log
+configuration_backup*
+
+# Optional churny files (exclude if you want cleaner diffs)
+# devices.yaml
+# groups.yaml
