@@ -84,6 +84,10 @@ bedroom_agent_speak:
     restore_delay_s: "{{ [12, [2.5, est_speech_s] | max] | min | round(0) | int }}"
 
   sequence:
+    - condition: state
+      entity_id: input_boolean.agent_speak_confirmations
+      state: "on"
+      
     # If music is playing, pause first (reduces weird overlap)
     - choose:
         - conditions: "{{ was_playing }}"

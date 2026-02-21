@@ -11,5 +11,5 @@ class Settings(BaseSettings):
     AGENT_MODE: str = "shadow"  # "shadow" or "active"
 
     TOOL_BACKEND: str = "ha"  # "local" or "http" or "ha" (real Home Assistant client)
-    HA_BASE_URL: str = "http://localhost:8123"
+    HA_BASE_URL: str = "http://host.docker.internal:8123"
     HA_TOKEN: str = ""

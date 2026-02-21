@@ -1,6 +1,32 @@
 services:
-
-  ha-mock:
-    build: ./mock_ha
+  bedroom-agent:
+    env_file:
+    - .env
+    container_name: bedroom-agent
+    build: .
+    restart: unless-stopped
     ports:
-      - "8123:8123"
+      - "9000:9000"
+
+    # This makes "host.docker.internal" work on Linux (Jetson),
+    # so you don’t hardcode 10.0.0.xxx anywhere.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    environment:
+      TZ: America/New_York
+      HA_URL: "http://host.docker.internal:8123"
+      MQTT_URL: "mqtt://host.docker.internal:1883"
+      # Add others as needed:
+      # LOG_LEVEL: "INFO"
+      # SQLITE_PATH: "/data/memory.sqlite"
+
+    volumes:
+      - ./data:/data
+
+    # # Optional: only if you have /healthz implemented
+    # healthcheck:
+    #   test: ["CMD-SHELL", "curl -fsS http://localhost:9000/healthz || exit 1"]
+    #   interval: 30s
+    #   timeout: 3s
+    #   retries: 5
