@@ -36,3 +36,16 @@ template:
         turn_off:
           service: script.agent_fan_off_request
 
+
+
+
+
+smartir:
+
+climate:
+  - platform: smartir
+    name: Bedroom AC
+    unique_id: bedroom_ac
+    device_code: 1390      # change if needed
+    controller_data: remote.broadlink_rm4_mini
+    delay: 0.2

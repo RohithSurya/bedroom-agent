@@ -12,9 +12,14 @@ frontend:
   enabled: true
 advanced:
   channel: 25
+  log_level: debug
 version: 5
 devices:
   '0x4ce175525d050000':
     friendly_name: bedroom_fan_plug
   '0xa4c13840253e8f88':
     friendly_name: bedroom_door_sensor
+  '0x54ef441000dbe24f':
+    friendly_name: bedroom_mmwave_sensor
+  '0xa4c1381aa87a65da':
+    friendly_name: bedroom_light_switch
