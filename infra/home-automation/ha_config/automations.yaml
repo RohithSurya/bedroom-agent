@@ -1,1 +1,106 @@
-[]
+- id: bedroom_agent_voice_chat
+  alias: Bedroom Agent Voice Chat
+  mode: single
+  triggers:
+    - trigger: conversation
+      command:
+        - "analyze bedroom"
+        - "analyze my bedroom"
+        - "check bedroom"
+        - "check my bedroom"
+        - "Tony {command}"
+        - "Tony ask bedroom agent to {command}"
+        - "bedroom agent {command}"
+        - "ask bedroom agent to {command}"
+        - "{command} in the bedroom"
+  actions:
+    - action: rest_command.bedroom_agent_chat
+      continue_on_error: true
+      data:
+        text: "{{ trigger.slots.command | default(trigger.sentence, true) }}"
+        state:
+          guest_mode: "{{ is_state('input_boolean.guest_mode', 'on') }}"
+      response_variable: resp
+    - variables:
+        has_resp: "{{ resp is defined and resp is not none }}"
+        body: >-
+          {% if has_resp and resp.content is mapping %}
+            {{ resp.content }}
+          {% elif has_resp and resp.content %}
+            {{ resp.content | from_json }}
+          {% else %}
+            {{ dict() }}
+          {% endif %}
+        mode: >-
+          {% if 'mode' in body %}
+            {{ body['mode'] }}
+          {% else %}
+            {{ '' }}
+          {% endif %}
+        intent: >-
+          {% if 'decision' in body and body['decision'] is mapping and 'chosen_intent' in body['decision'] %}
+            {{ body['decision']['chosen_intent'] }}
+          {% elif 'input' in body and body['input'] is mapping and 'intent' in body['input'] %}
+            {{ body['input']['intent'] }}
+          {% else %}
+            {{ '' }}
+          {% endif %}
+        info_summary: >-
+          {% if 'result' in body and body['result'] is mapping and 'summary' in body['result'] %}
+            {{ body['result']['summary'] }}
+          {% else %}
+            {{ '' }}
+          {% endif %}
+        decision: >-
+          {% if 'policy' in body and body['policy'] is mapping and 'decision' in body['policy'] %}
+            {{ body['policy']['decision'] | lower }}
+          {% elif 'decision' in body and body['decision'] is mapping and 'decision' in body['decision'] %}
+            {{ body['decision']['decision'] | lower }}
+          {% else %}
+            {{ '' }}
+          {% endif %}
+        reason: >-
+          {% if 'policy' in body and body['policy'] is mapping and 'reason' in body['policy'] %}
+            {{ body['policy']['reason'] }}
+          {% elif 'decision' in body and body['decision'] is mapping and 'reason' in body['decision'] %}
+            {{ body['decision']['reason'] }}
+          {% else %}
+            {{ '' }}
+          {% endif %}
+        reply: >-
+          {% if not has_resp %}
+            Bedroom agent is unavailable right now.
+          {% elif resp.status != 200 %}
+            Bedroom agent is unavailable right now.
+          {% elif mode == 'info' and info_summary %}
+            {{ info_summary }}
+          {% elif decision == 'deny' %}
+            {% if reason == 'guest_mode_on' %}
+              Guest mode is on.
+            {% elif reason == 'presence_required' %}
+              I do not detect anyone in the room.
+            {% elif reason.startswith('cooldown_active:') %}
+              That action is cooling down right now.
+            {% else %}
+              That request was blocked.
+            {% endif %}
+          {% elif intent == 'focus_start' %}
+            Starting focus mode.
+          {% elif intent == 'focus_end' %}
+            Ending focus mode.
+          {% elif intent == 'sleep_mode' %}
+            Starting sleep mode.
+          {% elif intent == 'comfort_adjust' %}
+            Adjusting bedroom comfort.
+          {% elif intent == 'fan_on' %}
+            Turning on the fan.
+          {% elif intent == 'fan_off' %}
+            Turning off the fan.
+          {% elif intent == 'night_mode' %}
+            Starting night mode.
+          {% elif intent == 'no_action' %}
+            No action needed.
+          {% else %}
+            Bedroom agent is handling it.
+          {% endif %}
+    - set_conversation_response: "{{ reply }}"

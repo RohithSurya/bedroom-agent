@@ -19,7 +19,7 @@ from core.config import Settings
 from core.cooldowns import CooldownStore
 from core.ids import new_correlation_id, new_idempotency_key
 from core.logging_jsonl import JsonlLogger
-from llm.ollama_client import OllamaClient
+from llm.factory import build_llm_client
 from tools.ha_http_client import HAToolClientHTTP
 from tools.tool_executor import ToolExecutor
 from tools.ha_real_client import HAToolClientReal
@@ -65,16 +65,22 @@ class AgentAppState:
         self.logger = JsonlLogger(log_dir=settings.LOG_DIR, tz_name=settings.TIMEZONE)
 
         # Optional LLM backend (local on-device). If it isn't running, routing falls back safely.
-        self.llm = OllamaClient(
-            base_url=settings.LLM_BASE_URL,
+        self.llm = build_llm_client(
+            provider=settings.LLM_PROVIDER,
             model=settings.LLM_MODEL,
             timeout_s=float(settings.LLM_TIMEOUT_S),
+            base_url=settings.LLM_BASE_URL,
+            mistral_api_key=settings.MISTRAL_API_KEY,
+            mistral_api_base_url=settings.MISTRAL_API_BASE_URL,
         )
         self.decision_llm = (
-            OllamaClient(
-                base_url=settings.LLM_BASE_URL,
+            build_llm_client(
+                provider=settings.LLM_PROVIDER,
                 model=settings.LLM_MODEL,
                 timeout_s=float(settings.LLM_DECISION_TIMEOUT_S),
+                base_url=settings.LLM_BASE_URL,
+                mistral_api_key=settings.MISTRAL_API_KEY,
+                mistral_api_base_url=settings.MISTRAL_API_BASE_URL,
             )
             if bool(settings.LLM_DECISION_ENABLED)
             else None

@@ -58,6 +58,54 @@ agent_fan_off_request:
       - stop: 'Denied by agent: {{ reason }}'
         error: true
   description: ''
+agent_chat_request:
+  alias: Agent Chat Request
+  mode: parallel
+  fields:
+    text:
+      description: Natural language request for the bedroom agent
+      example: start focus mode
+  sequence:
+  - action: rest_command.bedroom_agent_chat
+    continue_on_error: true
+    data:
+      text: "{{ text }}"
+      state:
+        guest_mode: "{{ is_state('input_boolean.guest_mode', 'on') }}"
+    response_variable: resp
+  - variables:
+      has_resp: "{{ resp is defined and resp is not none }}"
+      body: >-
+        {% if has_resp and resp.content is mapping %}
+          {{ resp.content }}
+        {% elif has_resp and resp.content %}
+          {{ resp.content | from_json }}
+        {% else %}
+          {{ dict() }}
+        {% endif %}
+      decision: >-
+        {% if 'policy' in body and body['policy'] is mapping and 'decision' in body['policy'] %}
+          {{ body['policy']['decision'] | lower }}
+        {% elif 'decision' in body and body['decision'] is mapping and 'decision' in body['decision'] %}
+          {{ body['decision']['decision'] | lower }}
+        {% else %}
+          {{ '' }}
+        {% endif %}
+      reason: >-
+        {% if 'policy' in body and body['policy'] is mapping and 'reason' in body['policy'] %}
+          {{ body['policy']['reason'] }}
+        {% elif 'decision' in body and body['decision'] is mapping and 'reason' in body['decision'] %}
+          {{ body['decision']['reason'] }}
+        {% else %}
+          {{ '' }}
+        {% endif %}
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: "{{ (not has_resp) or resp.status != 200 or decision == 'deny' }}"
+      sequence:
+      - stop: "Bedroom agent chat failed: {{ reason or ('http_' ~ (resp.status if has_resp else 'no_response')) }}"
+        error: true
 bedroom_agent_speak:
   alias: Bedroom Agent Speak
   mode: queued

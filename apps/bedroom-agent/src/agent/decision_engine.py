@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
 from agent.intent_registry import DECISION_INTENTS, DECISION_SCHEMA
-from llm.ollama_client import OllamaClient
+from llm.base import LLMClient
 from memory.sqlite_kv import SqliteKV
 
 
@@ -38,7 +38,7 @@ class DecisionChoice:
 @dataclass
 class DecisionEngine:
     kv: SqliteKV
-    llm: Optional[OllamaClient]
+    llm: Optional[LLMClient]
     max_events: int = 8
     min_confidence: float = 0.55
     use_vision: bool = True

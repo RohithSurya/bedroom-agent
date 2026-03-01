@@ -23,6 +23,16 @@ rest_command:
         "args": {{ args | default({}) | tojson }},
         "state": {{ state | default({}) | tojson }}
       }
+  bedroom_agent_chat:
+    url: "http://10.0.0.179:9000/agent/chat"
+    method: POST
+    timeout: 60
+    content_type: "application/json"
+    payload: >
+      {
+        "text": {{ text | tojson }},
+        "state": {{ state | default({}) | tojson }}
+      }
 
 
 template:

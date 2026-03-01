@@ -1,11 +1,38 @@
-graph LR
-  Events[MQTT + HA events] --> Logs[JSONL Append-only]
-  Logs --> Replay[Replay Harness]
-  Replay --> Reports[Eval Reports]
+flowchart TD
+  subgraph Inputs["Input streams"]
+    Voice["Voice or HTTP request"]
+    EntityReads["Live Home Assistant entity reads"]
+    MqttEvents["MQTT door / presence payloads"]
+    Images["Bedroom snapshots"]
+  end
 
-  Prefs[Preferences] --> SQLite[(SQLite)]
-  Episodes[Episodic Summaries] --> SQLite
-  Metrics[Derived Metrics v1.1] --> SQLite
+  subgraph Memory["SQLite memory.sqlite"]
+    Belief["belief namespace\npresence door_open last_door_open_ts"]
+    Prefs["prefs namespace\nguest_mode and user toggles"]
+    VisionState["vision namespace\nlatest_bedroom_analysis"]
+    StatusState["status namespace\nlast_summary"]
+    Events["events table\nappend-only typed events"]
+  end
 
-  SQLite --> Context[Context Packet Builder]
-  Context --> Orchestrator[Orchestrator]
+  subgraph Runtime["Runtime context"]
+    StatePacket["build_runtime_state()\nstate packet for routing and policy"]
+    Services["Router / StatusService /\nDecisionEngine / Orchestrator"]
+  end
+
+  Logs["logs/events.jsonl\ncorrelation-based execution log"]
+
+  MqttEvents --> Belief
+  MqttEvents --> Events
+  Images --> VisionState
+  Images --> Events
+
+  Belief --> StatePacket
+  Prefs --> StatePacket
+  VisionState --> StatePacket
+  EntityReads --> StatePacket
+  Voice --> StatePacket
+
+  StatePacket --> Services
+  Services --> StatusState
+  Services --> Events
+  Services --> Logs

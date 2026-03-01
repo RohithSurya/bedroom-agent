@@ -4,7 +4,7 @@ import base64
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from llm.ollama_client import OllamaClient
+from llm.base import LLMClient
 from memory.sqlite_kv import SqliteKV
 from vision.image_source import BedroomImageSource
 
@@ -50,7 +50,7 @@ ROOM_ANALYSIS_SIMPLE_SCHEMA: dict[str, Any] = {
 @dataclass
 class BedroomRoomAnalyzer:
     kv: SqliteKV
-    llm: Optional[OllamaClient]
+    llm: Optional[LLMClient]
     image_source: BedroomImageSource
     enabled: bool = True
     prompt_profile: str = "general"

@@ -1,26 +1,35 @@
 sequenceDiagram
-  participant User as User
-  participant Siri as HomePod Siri
+  actor User
   participant HA as Home Assistant
-  participant A as Orchestrator
-  participant P as Policy Gate
-  participant L as JSONL Logger
+  participant API as /agent/run
+  participant State as Runtime state builder
+  participant Tool as HA tool client
+  participant Orch as Orchestrator
+  participant Run as Runner
+  participant HAApi as HA service API
+  participant Log as JSONL log
 
-  User->>Siri: "Hey Siri, Night Mode"
-  Siri->>HA: Trigger Home Scene / Automation
-  HA->>A: webhook/service call: night_mode request
+  User->>HA: trigger Night Mode scene / script
+  HA->>API: POST /agent/run {intent: night_mode}
+  API->>State: build_runtime_state()
+  State->>Tool: read light / climate / sensor state
+  State-->>API: runtime state
+  API->>Orch: handle_request(night_mode, state)
 
-  A->>P: evaluate(request, state, prefs)
-  P-->>A: allow/deny + cooldown + safety_checks
-
-  alt allowed
-    A->>HA: call tools: dim light, set scene, optional AC adjust
-    HA-->>A: tool responses (success + new state)
-    A->>HA: verify state (light level / scene / climate)
-    HA-->>A: verified/failed
-  else denied
-    A-->>HA: no-op (or safe alternative)
+  alt policy allows action
+    Orch-->>API: actions [light.set off, tts.say]
+    API->>Run: execute_actions()
+    Run->>Tool: execute tool calls
+    Tool->>HAApi: call services
+    HAApi-->>Tool: tool responses
+    Run->>Tool: read back state for verification
+    Run->>Log: tool_result + verification
+    API-->>HA: decision + execution
+  else policy denies action
+    Orch-->>API: deny + fallback tts.say
+    API->>Run: execute_actions()
+    Run->>Log: denial result
+    API-->>HA: decision + execution
   end
 
-  A->>L: write logs (cid, decisions, actions, latency)
-  A->>HA: speak confirmation via TTS (HomePod)
+  HA-->>User: spoken confirmation

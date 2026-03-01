@@ -1,0 +1,50 @@
+sequenceDiagram
+  actor User
+  participant Assist as HA Assist
+  participant Auto as HA conversation automation
+  participant API as /agent/chat
+  participant State as Runtime state builder
+  participant Router as NLRouter
+  participant Status as StatusService
+  participant Vision as BedroomRoomAnalyzer
+  participant Decide as DecisionEngine
+  participant Orch as Orchestrator
+  participant Run as Runner
+  participant HAApi as HA service API
+
+  User->>Assist: "Tony start focus mode"
+  Assist->>Auto: matched conversation trigger
+  Auto->>API: POST /agent/chat
+  API->>State: build_runtime_state()
+  State-->>API: runtime state
+  API->>Router: route(text, state)
+
+  alt intent=status
+    Router-->>API: status
+    API->>Status: handle_query()
+    Status-->>API: mode=info result
+  else intent=analyze_bedroom
+    Router-->>API: analyze_bedroom
+    API->>Vision: analyze()
+    Vision-->>API: mode=info result
+  else intent=decision_request
+    Router-->>API: decision_request
+    API->>Decide: choose_intent()
+    Decide-->>API: chosen_intent + rationale
+    API->>Orch: handle_request(chosen_intent)
+    Orch-->>API: policy + actions
+    API->>Run: execute_actions()
+    Run->>HAApi: service calls + verification
+    Run-->>API: execution
+  else routed action intent
+    Router-->>API: focus_start / sleep_mode / fan_on ...
+    API->>Orch: handle_request(intent)
+    Orch-->>API: policy + actions
+    API->>Run: execute_actions()
+    Run->>HAApi: service calls + verification
+    Run-->>API: execution
+  end
+
+  API-->>Auto: JSON response
+  Auto->>Assist: set_conversation_response()
+  Assist-->>User: spoken reply

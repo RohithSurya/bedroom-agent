@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from llm.ollama_client import OllamaClient
+from llm.base import LLMClient
 from memory.sqlite_kv import SqliteKV
 
 
@@ -25,7 +25,7 @@ STATUS_SCHEMA: dict[str, Any] = {
 @dataclass
 class StatusService:
     kv: SqliteKV
-    llm: Optional[OllamaClient]
+    llm: Optional[LLMClient]
     tz_name: str
 
     def handle_query(self, query: str) -> dict[str, Any]:

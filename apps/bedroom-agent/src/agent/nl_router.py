@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 from agent.intent_registry import ROUTER_INTENTS
-from llm.ollama_client import OllamaClient
+from llm.base import LLMClient
 
 
 AllowedIntent = Literal[
@@ -44,7 +44,7 @@ class NLRouter:
     - The Orchestrator + PolicyGate remain deterministic and safety-critical.
     """
 
-    llm: Optional[OllamaClient] = None
+    llm: Optional[LLMClient] = None
 
     def route(self, *, text: str, state: dict[str, Any]) -> tuple[AllowedIntent, dict[str, Any]]:
         t = (text or "").strip().lower()

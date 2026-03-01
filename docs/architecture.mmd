@@ -1,43 +1,75 @@
-graph TD
-  subgraph Edge_Device[Jetson / Edge Host]
-    Orchestrator[Agent Orchestrator]
-    Policy[Policy Gate + Safety]
-    Perception[Always-on Perception: YOLO]
-    State[State Estimator / Belief]
-    Memory[SQLite: prefs + episodic summaries + indexes]
-    Logs[Append-only JSONL logs]
-    Eval[Replay + Eval Harness]
+flowchart LR
+  User["User"]
+
+  subgraph Voice["Voice + Home Assistant"]
+    Assist["Assist / conversation trigger"]
+    Automation["HA automations + scripts"]
+    Rest["rest_command\nbedroom_agent_chat / bedroom_agent_run"]
+    HAApi["Home Assistant service + state API"]
+    Entities["HA entities\nlight fan climate sensors"]
+    Speak["script.bedroom_agent_speak"]
   end
 
-  subgraph Home[Home Assistant]
-    HA[Home Assistant Core]
-    TTS[HomePod TTS via HA/HomeKit]
-    Scenes[Scenes/Automations: Night Mode, Daily briefing]
-    Climate[SmartIR / Broadlink climate]
-    Zigbee[Zigbee2MQTT devices: mmwave sensors, door sensors, switches]
+  subgraph Agent["bedroom-agent FastAPI service"]
+    API["FastAPI app\n/health /agent/run /agent/chat"]
+    State["Runtime state builder"]
+    Router["NLRouter"]
+    Status["StatusService"]
+    Decision["DecisionEngine"]
+    Vision["BedroomRoomAnalyzer"]
+    Orchestrator["Orchestrator"]
+    Runner["Runner"]
+    Tools["HA tool client\nreal / http / local"]
+    MQTT["Z2MMqttListener"]
   end
 
-  subgraph Bus[Event Bus]
-    MQTT[(Mosquitto MQTT Broker)]
+  subgraph Storage["Local state + logs"]
+    SQLite["SQLite memory\nbelief / prefs / vision / status / events"]
+    Jsonl["JSONL log\nlogs/events.jsonl"]
   end
 
-  Siri[HomePod Siri / Apple Home Scene] --> HA
-  HA --> Orchestrator
+  subgraph Inputs["External inputs"]
+    Broker["MQTT broker / Zigbee2MQTT"]
+    Camera["BedroomImageSource\nfswebcam / HA snapshot / file"]
+    Model["LLM provider\nOllama or Mistral API"]
+    Whisper["Wyoming / faster-whisper"]
+  end
 
-  Zigbee --> HA
-  HA <--> MQTT
+  User --> Assist
+  Whisper -. speech-to-text .-> Assist
+  Assist --> Automation
+  Automation --> Rest
+  Rest --> API
 
-  MQTT --> Perception
-  Perception --> State
-  State --> Orchestrator
+  API --> State
+  State --> Tools
+  Tools <--> HAApi
+  HAApi <--> Entities
 
-  Orchestrator --> Policy
-  Policy --> Orchestrator
+  API --> Router
+  API --> Status
+  API --> Decision
+  API --> Vision
+  API --> Orchestrator
 
-  Orchestrator --> HA
-  HA --> Orchestrator
+  Router <--> Model
+  Status <--> Model
+  Decision <--> Model
+  Vision --> Camera
+  Vision <--> Model
 
-  Orchestrator --> Memory
-  Orchestrator --> Logs
-  Eval --> Orchestrator
-  Logs --> Eval
+  Orchestrator --> Runner
+  Runner --> Tools
+  Runner --> Jsonl
+
+  Broker --> MQTT
+  MQTT --> SQLite
+  MQTT --> Orchestrator
+  MQTT --> Runner
+
+  State <--> SQLite
+  Status --> SQLite
+  Decision --> SQLite
+  Vision --> SQLite
+  API --> SQLite
+  HAApi --> Speak

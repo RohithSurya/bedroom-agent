@@ -1,0 +1,34 @@
+sequenceDiagram
+  participant Door as Door sensor
+  participant Presence as mmWave sensor
+  participant Broker as MQTT broker
+  participant Listener as Z2MMqttListener
+  participant DB as SQLite
+  participant Orch as Orchestrator
+  participant Run as Runner
+  participant HA as Home Assistant API
+
+  Door->>Broker: contact=false
+  Broker->>Listener: door topic payload
+  Listener->>DB: set belief.door_open=true
+  Listener->>DB: set belief.last_door_open_ts
+  Listener->>DB: append door_update
+
+  Presence->>Broker: presence=true
+  Broker->>Listener: presence topic payload
+  Listener->>DB: set belief.presence=true
+  Listener->>DB: append presence_update
+
+  alt within ENTRY_WINDOW_S and not on cooldown
+    Listener->>DB: append enter_detected
+    Listener->>Orch: on_enter callback
+    Orch-->>Run: light-on plan
+    Run->>HA: turn on light / switch
+  else presence becomes false
+    Listener->>DB: start vacancy timer
+    Note over Listener: after VACANCY_OFF_DELAY_S
+    Listener->>DB: append vacancy_detected
+    Listener->>Run: on_vacant callback
+    Run->>HA: turn off light / switch
+    Listener->>DB: append vacancy_off_executed
+  end
