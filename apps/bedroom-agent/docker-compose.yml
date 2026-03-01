@@ -15,8 +15,9 @@ services:
 
     environment:
       TZ: America/New_York
-      HA_URL: "http://host.docker.internal:8123"
-      MQTT_URL: "mqtt://host.docker.internal:1883"
+      HA_BASE_URL: "http://host.docker.internal:8123"
+      LLM_BASE_URL: "http://host.docker.internal:11434"
+      # MQTT_URL: "mqtt://host.docker.internal:1883"  # if/when you wire MQTT into the agent
       # Add others as needed:
       # LOG_LEVEL: "INFO"
       # SQLITE_PATH: "/data/memory.sqlite"

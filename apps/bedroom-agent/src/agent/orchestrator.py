@@ -19,6 +19,32 @@ class Orchestrator:
     ) -> dict[str, Any]:
         cid = new_correlation_id()
 
+        # Default safe response for unknown intents.
+        # Keep this inside the method so we can capture `cid`.
+        def _unknown_intent_plan(intent_name: str) -> dict[str, Any]:
+            decision = PolicyDecision(
+                decision="deny",
+                reason=f"unknown_intent:{intent_name}",
+                cooldown_key=None,
+                cooldown_seconds=0,
+                safety_checks=[],
+            )
+            actions: list[ToolCall] = [
+                ToolCall(
+                    tool="tts.say",
+                    args={"message": f"Request blocked: {_humanize_reason(decision.reason)}"},
+                    idempotency_key=new_idempotency_key(),
+                    correlation_id=cid,
+                )
+            ]
+            return {
+                "correlation_id": cid,
+                "decision": decision,
+                "actions": actions,
+                "cooldown_key": None,
+                "cooldown_seconds": 0,
+            }
+
         if intent == "night_mode":
             cooldown_key = f"intent:{intent}:room:bedroom"
             decision = evaluate_night_mode(state)
@@ -81,6 +107,7 @@ class Orchestrator:
                 "cooldown_seconds": cooldown_seconds,
                 "cooldown_key": cooldown_key,
             }
+
         if intent in ("fan_on", "fan_off"):
             decision = evaluate_fan_power(state)
             actions: list[ToolCall] = []
@@ -138,21 +165,7 @@ class Orchestrator:
                 "cooldown_seconds": cooldown_seconds,
             }
 
-        actions.append(
-            ToolCall(
-                tool="tts.say",
-                args={"message": f"Fan request blocked: {_humanize_reason(decision.reason)}"},
-                idempotency_key=new_idempotency_key(),
-                correlation_id=cid,
-            )
-        )
-        return {
-            "correlation_id": cid,
-            "decision": decision,
-            "actions": actions,
-            "cooldown_key": None,
-            "cooldown_seconds": 0,
-        }
+        return _unknown_intent_plan(intent)
 
 
 def _humanize_reason(reason: str) -> str:

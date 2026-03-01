@@ -13,3 +13,8 @@ class Settings(BaseSettings):
     TOOL_BACKEND: str = "ha"  # "local" or "http" or "ha" (real Home Assistant client)
     HA_BASE_URL: str = "http://host.docker.internal:8123"
     HA_TOKEN: str = ""
+
+    # Local LLM/VLM backend (hackathon): e.g., Ollama, TensorRT-LLM server, etc.
+    LLM_BASE_URL: str = "http://host.docker.internal:11434"
+    LLM_MODEL: str = "ministral-3:3b"
+    LLM_TIMEOUT_S: float = 60.0

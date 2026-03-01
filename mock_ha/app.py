@@ -49,7 +49,11 @@ def maybe_fail(tool: str):
     return {
         "ok": False,
         "tool": tool,
-        "details": {"injected": True, "error": plan["error"], "remaining": plan["remaining"]},
+        "details": {
+            "injected": True,
+            "error": plan["error"],
+            "remaining": plan["remaining"],
+        },
     }
 
 
@@ -98,7 +102,11 @@ def tool_switch_set(req: ToolRequest):
     entity_id = str(req.args.get("entity_id"))
     state = str(req.args.get("state", "off")).lower()
     if state not in ("on", "off"):
-        return {"ok": False, "tool": "switch.set", "details": {"error": "invalid_state", "state": state}}
+        return {
+            "ok": False,
+            "tool": "switch.set",
+            "details": {"error": "invalid_state", "state": state},
+        }
 
     STATE["switches"].setdefault(entity_id, {})
     STATE["switches"][entity_id]["state"] = state
