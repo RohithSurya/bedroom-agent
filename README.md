@@ -1,6 +1,7 @@
 # bedroom-agent
 
-Bedroom-first home automation agent built around Home Assistant, deterministic policy gates, lightweight local memory, and optional LLM-assisted routing and vision.
+Edge-Native Autonomous Intelligence using LLM centric logic that control the entities of the room. 
+Totally offline system deployed on Jetson Orin Nano Super
 
 The project is split into three pieces:
 
@@ -18,6 +19,28 @@ The project is split into three pieces:
 - Supports room analysis from a bedroom camera snapshot
 - Integrates with Home Assistant for voice, climate, fan, lights, and TTS
 
+
+## Hardware + ecosystem (locked)
+
+**Compute**
+
+- **NVIDIA Jetson Orin Nano 8GB**
+
+**Sensors + control**
+
+- **Camera** -> to feed photos to mistral model
+- **mmWave presence sensor** (Zigbee) → presence/occupancy belief state
+- **Zigbee smart plug** → bedside lamp + power telemetry use-cases
+- **Home Assistant Connect ZBT-2** (Zigbee coordinator, run in **Zigbee mode** for v1.0)
+- **Broadlink RM4 Mini (IR blaster)** → controls **Vissani window AC**
+- **Home Assistant + SmartIR climate entity** → reliable HVAC abstraction
+- **HomePod Gen2** → TTS output + temp/humidity sensor (as available in Home ecosystem)
+
+**Voice control path (locked Option 1)**
+
+- **HomePod Siri → Apple Home Scene → Home Assistant → LLM/Agent → HomePod speaks**
+
+
 ## Architecture
 
 At runtime the agent looks like this:
@@ -30,15 +53,13 @@ At runtime the agent looks like this:
 6. MQTT listeners update occupancy and door beliefs continuously in the background.
 7. Optional vision analysis captures a bedroom image and asks the configured LLM/VLM for structured output.
 
-Mermaid diagrams live in `docs/` and are indexed in `docs/diagrams.md`:
+Mermaid diagrams live in `docs/`:
 
 - `docs/architecture.mmd`
-- `docs/voice_chat_flow.mmd`
-- `docs/mqtt_entry_flow.mmd`
+- `docs/data_architecture.mmd`
 - `docs/analyze_bedroom.mmd`
 - `docs/night_mode.mmd`
-- `docs/data_architecture.mmd`
-- `docs/diagrams.md`
+- `docs/habit_engine.mmd`
 
 ## Quick Start
 
@@ -105,7 +126,6 @@ docs/                           diagrams, contracts, runbook
 
 ## Documentation
 
-- `docs/diagrams.md`: architecture and flow diagram index
 - `apps/bedroom-agent/README.md`: app-specific setup and API usage
 - `docs/contracts.md`: request/response, tool, state, and event contracts
 - `docs/runbook.md`: deployment, operations, and troubleshooting
