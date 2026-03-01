@@ -1,0 +1,48 @@
+flowchart LR
+  User["User"]
+
+  subgraph Room["Bedroom physical components"]
+    HomePod["HomePod Gen2\nvoice in + TTS out"]
+    Camera["USB camera\nroom snapshots"]
+    Presence["mmWave presence sensor\nZigbee"]
+    Door["Bedroom door sensor\nZigbee"]
+    TempHum["Temp / humidity sensor\nHA entity"]
+    FanPlug["Bedroom fan plug\nswitch.bedroom_fan_plug"]
+    LightSwitch["Bedroom light switch\nswitch.bedroom_light_switch"]
+    AC["Vissani window AC"]
+  end
+
+  subgraph Control["Bridges and control plane"]
+    ZBT2["Home Assistant Connect ZBT-2\nZigbee coordinator"]
+    Z2M["Zigbee2MQTT + MQTT broker"]
+    HA["Home Assistant"]
+    SmartIR["SmartIR climate entity\nclimate.bedroom_ac"]
+    Broadlink["Broadlink RM4 Mini\nIR blaster"]
+    Jetson["Jetson Orin Nano\nbedroom-agent + model runtime"]
+  end
+
+  User --> HomePod
+  HomePod -->|voice request| HA
+  HA -->|TTS playback| HomePod
+
+  Camera -->|image capture| Jetson
+
+  Presence -->|Zigbee telemetry| ZBT2
+  Door -->|Zigbee telemetry| ZBT2
+  TempHum -->|sensor state| HA
+  FanPlug <-->|Zigbee switch control| ZBT2
+  LightSwitch <-->|Zigbee switch control| ZBT2
+
+  ZBT2 --> Z2M
+  Z2M -->|MQTT events| Jetson
+  Z2M -->|entity updates| HA
+
+  Jetson -->|REST tool requests| HA
+  HA -->|entity state API| Jetson
+
+  HA --> SmartIR
+  SmartIR --> Broadlink
+  Broadlink -->|IR commands| AC
+
+  HA -->|switch service calls| Z2M
+  Z2M --> ZBT2

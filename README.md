@@ -46,6 +46,117 @@ The project is split into three pieces:
 
 - **HomePod Siri → Apple Home Scene → Home Assistant → LLM/Agent → HomePod speaks**
 
+### Sample Camera Photo
+
+![Sample bedroom camera photo](apps/bedroom-agent/data/bedroom-latest.jpg)
+
+This is a representative frame from the bedroom camera used by the vision path. A typical snapshot includes the bed, desk and monitor, chair, closet area, dresser, and mirror, and may also include a person in the room. The agent uses frames like this for `analyze bedroom` requests and for any vision-assisted room-state reasoning.
+
+### Physical Components and Integration Diagram
+
+```mermaid
+flowchart LR
+  User["User"]
+
+  subgraph Room["Bedroom physical components"]
+    HomePod["HomePod Gen2\nvoice in + TTS out"]
+    Camera["USB camera\nroom snapshots"]
+    Presence["mmWave presence sensor\nZigbee"]
+    Door["Bedroom door sensor\nZigbee"]
+    TempHum["Temp / humidity sensor\nHA entity"]
+    FanPlug["Bedroom fan plug\nswitch.bedroom_fan_plug"]
+    LightSwitch["Bedroom light switch\nswitch.bedroom_light_switch"]
+    AC["Vissani window AC"]
+  end
+
+  subgraph Control["Bridges and control plane"]
+    ZBT2["Home Assistant Connect ZBT-2\nZigbee coordinator"]
+    Z2M["Zigbee2MQTT + MQTT broker"]
+    HA["Home Assistant"]
+    SmartIR["SmartIR climate entity\nclimate.bedroom_ac"]
+    Broadlink["Broadlink RM4 Mini\nIR blaster"]
+    Jetson["Jetson Orin Nano\nbedroom-agent + model runtime"]
+  end
+
+  User --> HomePod
+  HomePod -->|voice request| HA
+  HA -->|TTS playback| HomePod
+
+  Camera -->|image capture| Jetson
+
+  Presence -->|Zigbee telemetry| ZBT2
+  Door -->|Zigbee telemetry| ZBT2
+  TempHum -->|sensor state| HA
+  FanPlug <-->|Zigbee switch control| ZBT2
+  LightSwitch <-->|Zigbee switch control| ZBT2
+
+  ZBT2 --> Z2M
+  Z2M -->|MQTT events| Jetson
+  Z2M -->|entity updates| HA
+
+  Jetson -->|REST tool requests| HA
+  HA -->|entity state API| Jetson
+
+  HA --> SmartIR
+  SmartIR --> Broadlink
+  Broadlink -->|IR commands| AC
+
+  HA -->|switch service calls| Z2M
+  Z2M --> ZBT2
+```
+
+### Container and Service Interaction Diagram
+
+```mermaid
+flowchart LR
+  subgraph UserLayer["User and client layer"]
+    User["User / HomePod Siri"]
+  end
+
+  subgraph HAStack["infra/home-automation/docker-compose.yaml"]
+    HA["homeassistant\nhost network\n:8123"]
+    MQTT["mosquitto\nhost network\n:1883"]
+    Z2M["zigbee2mqtt\nhost network"]
+  end
+
+  subgraph AgentStack["apps/bedroom-agent/docker-compose.yml"]
+    Agent["bedroom-agent\nFastAPI\n:9000"]
+  end
+
+  subgraph VoiceStack["wyoming/docker-compose.yaml"]
+    Whisper["faster-whisper\nWyoming STT"]
+  end
+
+  subgraph External["External or host-level services"]
+    LLM["LLM backend\nOllama :11434 or Mistral API"]
+    Broadlink["Broadlink RM4 Mini"]
+    HomePod["HomePod Gen2"]
+    Zigbee["Zigbee devices\nsensor + switch mesh"]
+    Camera["USB camera / video device"]
+  end
+
+  User --> HomePod
+  HomePod -->|voice request| HA
+  HA -->|TTS / media playback| HomePod
+
+  HA -->|Assist pipeline / STT| Whisper
+
+  HA -->|REST commands\n/agent/run /agent/chat| Agent
+  Agent -->|HA state + service API| HA
+
+  Agent -->|MQTT subscribe\npresence + door topics| MQTT
+  Z2M -->|publish telemetry| MQTT
+  MQTT -->|MQTT discovery + entity updates| HA
+
+  Z2M -->|USB serial / Zigbee radio| Zigbee
+  HA -->|device control via MQTT entities| MQTT
+
+  Agent -->|generate / structured output| LLM
+  Agent -->|capture snapshots| Camera
+
+  HA -->|SmartIR climate control| Broadlink
+```
+
 
 ## Architecture
 
@@ -59,13 +170,234 @@ At runtime the agent looks like this:
 6. MQTT listeners update occupancy and door beliefs continuously in the background.
 7. Optional vision analysis captures a bedroom image and asks the configured LLM/VLM for structured output.
 
-Mermaid diagrams live in `docs/`:
+### System Architecture Diagram
+
+```mermaid
+flowchart LR
+  User["User"]
+
+  subgraph Voice["Voice + Home Assistant"]
+    Assist["Assist / conversation trigger"]
+    Automation["HA automations + scripts"]
+    Rest["rest_command\nbedroom_agent_chat / bedroom_agent_run"]
+    HAApi["Home Assistant service + state API"]
+    Entities["HA entities\nlight fan climate sensors"]
+    Speak["script.bedroom_agent_speak"]
+  end
+
+  subgraph Agent["bedroom-agent FastAPI service"]
+    API["FastAPI app\n/health /agent/run /agent/chat"]
+    State["Runtime state builder"]
+    Router["NLRouter"]
+    Status["StatusService"]
+    Decision["DecisionEngine"]
+    Vision["BedroomRoomAnalyzer"]
+    Orchestrator["Orchestrator"]
+    Runner["Runner"]
+    Tools["HA tool client\nreal / http / local"]
+    MQTT["Z2MMqttListener"]
+  end
+
+  subgraph Storage["Local state + logs"]
+    SQLite["SQLite memory\nbelief / prefs / vision / status / events"]
+    Jsonl["JSONL log\nlogs/events.jsonl"]
+  end
+
+  subgraph Inputs["External inputs"]
+    Broker["MQTT broker / Zigbee2MQTT"]
+    Camera["BedroomImageSource\nfswebcam / HA snapshot / file"]
+    Model["LLM provider\nOllama or Mistral API"]
+    Whisper["Wyoming / faster-whisper"]
+  end
+
+  User --> Assist
+  Whisper -. speech-to-text .-> Assist
+  Assist --> Automation
+  Automation --> Rest
+  Rest --> API
+
+  API --> State
+  State --> Tools
+  Tools <--> HAApi
+  HAApi <--> Entities
+
+  API --> Router
+  API --> Status
+  API --> Decision
+  API --> Vision
+  API --> Orchestrator
+
+  Router <--> Model
+  Status <--> Model
+  Decision <--> Model
+  Vision --> Camera
+  Vision <--> Model
+
+  Orchestrator --> Runner
+  Runner --> Tools
+  Runner --> Jsonl
+
+  Broker --> MQTT
+  MQTT --> SQLite
+  MQTT --> Orchestrator
+  MQTT --> Runner
+
+  State <--> SQLite
+  Status --> SQLite
+  Decision --> SQLite
+  Vision --> SQLite
+  API --> SQLite
+  HAApi --> Speak
+```
+
+### Data Architecture Diagram
+
+```mermaid
+flowchart TD
+  subgraph Inputs["Input streams"]
+    Voice["Voice or HTTP request"]
+    EntityReads["Live Home Assistant entity reads"]
+    MqttEvents["MQTT door / presence payloads"]
+    Images["Bedroom snapshots"]
+  end
+
+  subgraph Memory["SQLite memory.sqlite"]
+    Belief["belief namespace\npresence door_open last_door_open_ts"]
+    Prefs["prefs namespace\nguest_mode and user toggles"]
+    VisionState["vision namespace\nlatest_bedroom_analysis"]
+    StatusState["status namespace\nlast_summary"]
+    Events["events table\nappend-only typed events"]
+  end
+
+  subgraph Runtime["Runtime context"]
+    StatePacket["build_runtime_state()\nstate packet for routing and policy"]
+    Services["Router / StatusService /\nDecisionEngine / Orchestrator"]
+  end
+
+  Logs["logs/events.jsonl\ncorrelation-based execution log"]
+
+  MqttEvents --> Belief
+  MqttEvents --> Events
+  Images --> VisionState
+  Images --> Events
+
+  Belief --> StatePacket
+  Prefs --> StatePacket
+  VisionState --> StatePacket
+  EntityReads --> StatePacket
+  Voice --> StatePacket
+
+  StatePacket --> Services
+  Services --> StatusState
+  Services --> Events
+  Services --> Logs
+```
+
+### Voice Chat Flow Diagram
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant Assist as HA Assist
+  participant Auto as HA conversation automation
+  participant API as /agent/chat
+  participant State as Runtime state builder
+  participant Router as NLRouter
+  participant Status as StatusService
+  participant Vision as BedroomRoomAnalyzer
+  participant Decide as DecisionEngine
+  participant Orch as Orchestrator
+  participant Run as Runner
+  participant HAApi as HA service API
+
+  User->>Assist: "Tony start focus mode"
+  Assist->>Auto: matched conversation trigger
+  Auto->>API: POST /agent/chat
+  API->>State: build_runtime_state()
+  State-->>API: runtime state
+  API->>Router: route(text, state)
+
+  alt intent=status
+    Router-->>API: status
+    API->>Status: handle_query()
+    Status-->>API: mode=info result
+  else intent=analyze_bedroom
+    Router-->>API: analyze_bedroom
+    API->>Vision: analyze()
+    Vision-->>API: mode=info result
+  else intent=decision_request
+    Router-->>API: decision_request
+    API->>Decide: choose_intent()
+    Decide-->>API: chosen_intent + rationale
+    API->>Orch: handle_request(chosen_intent)
+    Orch-->>API: policy + actions
+    API->>Run: execute_actions()
+    Run->>HAApi: service calls + verification
+    Run-->>API: execution
+  else routed action intent
+    Router-->>API: focus_start / sleep_mode / fan_on ...
+    API->>Orch: handle_request(intent)
+    Orch-->>API: policy + actions
+    API->>Run: execute_actions()
+    Run->>HAApi: service calls + verification
+    Run-->>API: execution
+  end
+
+  API-->>Auto: JSON response
+  Auto->>Assist: set_conversation_response()
+  Assist-->>User: spoken reply
+```
+
+### MQTT Entry Flow Diagram
+
+```mermaid
+sequenceDiagram
+  participant Door as Door sensor
+  participant Presence as mmWave sensor
+  participant Broker as MQTT broker
+  participant Listener as Z2MMqttListener
+  participant DB as SQLite
+  participant Orch as Orchestrator
+  participant Run as Runner
+  participant HA as Home Assistant API
+
+  Door->>Broker: contact=false
+  Broker->>Listener: door topic payload
+  Listener->>DB: set belief.door_open=true
+  Listener->>DB: set belief.last_door_open_ts
+  Listener->>DB: append door_update
+
+  Presence->>Broker: presence=true
+  Broker->>Listener: presence topic payload
+  Listener->>DB: set belief.presence=true
+  Listener->>DB: append presence_update
+
+  alt within ENTRY_WINDOW_S and not on cooldown
+    Listener->>DB: append enter_detected
+    Listener->>Orch: on_enter callback
+    Orch-->>Run: light-on plan
+    Run->>HA: turn on light / switch
+  else presence becomes false
+    Listener->>DB: start vacancy timer
+    Note over Listener: after VACANCY_OFF_DELAY_S
+    Listener->>DB: append vacancy_detected
+    Listener->>Run: on_vacant callback
+    Run->>HA: turn off light / switch
+    Listener->>DB: append vacancy_off_executed
+  end
+```
+
+Mermaid source files also live in `docs/`:
 
 - `docs/architecture.mmd`
+- `docs/container_services.mmd`
+- `docs/physical_integration.mmd`
+- `docs/voice_chat_flow.mmd`
+- `docs/mqtt_entry_flow.mmd`
 - `docs/data_architecture.mmd`
 - `docs/analyze_bedroom.mmd`
 - `docs/night_mode.mmd`
-- `docs/habit_engine.mmd`
+- `docs/diagrams.md`
 
 ## Quick Start
 

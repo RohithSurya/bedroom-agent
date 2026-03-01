@@ -1,0 +1,47 @@
+flowchart LR
+  subgraph UserLayer["User and client layer"]
+    User["User / HomePod Siri"]
+  end
+
+  subgraph HAStack["infra/home-automation/docker-compose.yaml"]
+    HA["homeassistant\nhost network\n:8123"]
+    MQTT["mosquitto\nhost network\n:1883"]
+    Z2M["zigbee2mqtt\nhost network"]
+  end
+
+  subgraph AgentStack["apps/bedroom-agent/docker-compose.yml"]
+    Agent["bedroom-agent\nFastAPI\n:9000"]
+  end
+
+  subgraph VoiceStack["wyoming/docker-compose.yaml"]
+    Whisper["faster-whisper\nWyoming STT"]
+  end
+
+  subgraph External["External or host-level services"]
+    LLM["LLM backend\nOllama :11434 or Mistral API"]
+    Broadlink["Broadlink RM4 Mini"]
+    HomePod["HomePod Gen2"]
+    Zigbee["Zigbee devices\nsensor + switch mesh"]
+    Camera["USB camera / video device"]
+  end
+
+  User --> HomePod
+  HomePod -->|voice request| HA
+  HA -->|TTS / media playback| HomePod
+
+  HA -->|Assist pipeline / STT| Whisper
+
+  HA -->|REST commands\n/agent/run /agent/chat| Agent
+  Agent -->|HA state + service API| HA
+
+  Agent -->|MQTT subscribe\npresence + door topics| MQTT
+  Z2M -->|publish telemetry| MQTT
+  MQTT -->|MQTT discovery + entity updates| HA
+
+  Z2M -->|USB serial / Zigbee radio| Zigbee
+  HA -->|device control via MQTT entities| MQTT
+
+  Agent -->|generate / structured output| LLM
+  Agent -->|capture snapshots| Camera
+
+  HA -->|SmartIR climate control| Broadlink
