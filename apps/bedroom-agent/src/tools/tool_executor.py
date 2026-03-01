@@ -105,23 +105,32 @@ class ToolExecutor:
         # ACTIVE mode: apply side effects
         if call.tool == "light.set":
             entity_id = str(call.args.get("entity_id", "light.bedroom_lamp"))
-            brightness_pct = int(call.args.get("brightness_pct", 15))
-            transition_s = float(call.args.get("transition_s", 0))
+            state = str(call.args.get("state", "on")).lower()
+            if state not in ("on", "off"):
+                result = ToolResult(
+                    ok=False, tool=call.tool, details={"error": "invalid_state", "state": state}
+                )
+            else:
+                brightness_pct = int(call.args.get("brightness_pct", 15))
+                transition_s = float(call.args.get("transition_s", 0))
 
-            self.device_state["lights"].setdefault(entity_id, {})
-            self.device_state["lights"][entity_id]["brightness_pct"] = brightness_pct
-            self.device_state["lights"][entity_id]["transition_s"] = transition_s
+                self.device_state["lights"].setdefault(entity_id, {})
+                self.device_state["lights"][entity_id]["state"] = state
+                self.device_state["lights"][entity_id]["transition_s"] = transition_s
+                if state == "on":
+                    self.device_state["lights"][entity_id]["brightness_pct"] = brightness_pct
 
-            result = ToolResult(
-                ok=True,
-                tool=call.tool,
-                details={
-                    "cached": False,
-                    "entity_id": entity_id,
-                    "brightness_pct": brightness_pct,
-                    "transition_s": transition_s,
-                },
-            )
+                result = ToolResult(
+                    ok=True,
+                    tool=call.tool,
+                    details={
+                        "cached": False,
+                        "entity_id": entity_id,
+                        "state": state,
+                        "brightness_pct": brightness_pct if state == "on" else None,
+                        "transition_s": transition_s,
+                    },
+                )
 
         elif call.tool == "tts.say":
             msg = str(call.args.get("message", ""))

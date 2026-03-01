@@ -53,3 +53,29 @@ def evaluate_fan_power(state: dict) -> PolicyDecision:
         cooldown_seconds=5,  # fan toggle cooldown (tweak as you like)
         safety_checks=["guest_mode_off", "presence_required"],
     )
+
+
+def evaluate_enter_room(state: dict) -> PolicyDecision:
+    if state.get("guest_mode", False):
+        return PolicyDecision(
+            decision="deny",
+            reason="guest_mode_on",
+            cooldown_seconds=0,
+            safety_checks=["guest_mode_off"],
+        )
+
+    # require presence; with Option B, presence is your belief state
+    if not state.get("presence", False):
+        return PolicyDecision(
+            decision="deny",
+            reason="presence_required",
+            cooldown_seconds=0,
+            safety_checks=["presence_required"],
+        )
+
+    return PolicyDecision(
+        decision="allow",
+        reason="ok",
+        cooldown_seconds=60,  # prevent spam if sensors bounce
+        safety_checks=["guest_mode_off", "presence_required"],
+    )

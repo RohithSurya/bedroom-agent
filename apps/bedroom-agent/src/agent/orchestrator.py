@@ -5,8 +5,7 @@ from typing import Any
 from contracts.ha import ToolCall
 from contracts.policy import PolicyDecision
 from core.ids import new_correlation_id, new_idempotency_key
-from agent.policies import evaluate_night_mode
-from agent.policies import evaluate_fan_power
+from agent.policies import evaluate_night_mode, evaluate_fan_power, evaluate_enter_room
 from core.cooldowns import CooldownStore
 
 
@@ -19,62 +18,33 @@ class Orchestrator:
     ) -> dict[str, Any]:
         cid = new_correlation_id()
 
-        # Default safe response for unknown intents.
-        # Keep this inside the method so we can capture `cid`.
-        def _unknown_intent_plan(intent_name: str) -> dict[str, Any]:
-            decision = PolicyDecision(
-                decision="deny",
-                reason=f"unknown_intent:{intent_name}",
-                cooldown_key=None,
-                cooldown_seconds=0,
-                safety_checks=[],
-            )
-            actions: list[ToolCall] = [
-                ToolCall(
-                    tool="tts.say",
-                    args={"message": f"Request blocked: {_humanize_reason(decision.reason)}"},
-                    idempotency_key=new_idempotency_key(),
-                    correlation_id=cid,
-                )
-            ]
-            return {
-                "correlation_id": cid,
-                "decision": decision,
-                "actions": actions,
-                "cooldown_key": None,
-                "cooldown_seconds": 0,
-            }
-
+        # ---------- night_mode ----------
         if intent == "night_mode":
             cooldown_key = f"intent:{intent}:room:bedroom"
             decision = evaluate_night_mode(state)
             cooldown_seconds = decision.cooldown_seconds
             actions: list[ToolCall] = []
 
-            if decision.decision == "allow" and decision.cooldown_seconds > 0:
-                allowed, remaining = self.cooldowns.can_run(cooldown_key, decision.cooldown_seconds)
+            if decision.decision == "allow" and cooldown_seconds > 0:
+                allowed, remaining = self.cooldowns.can_run(cooldown_key, cooldown_seconds)
                 if not allowed:
                     decision = PolicyDecision(
                         decision="deny",
                         reason=f"cooldown_active:{remaining}s_remaining",
-                        cooldown_key=cooldown_key,
                         cooldown_seconds=cooldown_seconds,
                         safety_checks=[],
                     )
 
             if decision.decision == "allow":
-                # v0 lights-only defaults
-                entity_id = args.get("entity_id", "light.bedroom_lamp")
+                entity_id = args.get("entity_id", "switch.bedroom_light_switch")
                 brightness_pct = int(args.get("brightness_pct", 15))
                 transition_s = float(args.get("transition_s", 2))
 
                 actions.append(
                     ToolCall(
-                        tool="light.set",
+                        tool="switch.set",
                         args={
                             "entity_id": entity_id,
-                            "brightness_pct": brightness_pct,
-                            "transition_s": transition_s,
                         },
                         idempotency_key=new_idempotency_key(),
                         correlation_id=cid,
@@ -108,6 +78,7 @@ class Orchestrator:
                 "cooldown_key": cooldown_key,
             }
 
+        # ---------- fan_on / fan_off ----------
         if intent in ("fan_on", "fan_off"):
             decision = evaluate_fan_power(state)
             actions: list[ToolCall] = []
@@ -115,11 +86,9 @@ class Orchestrator:
             entity_id = args.get("entity_id", "switch.bedroom_fan_plug")
             desired = "on" if intent == "fan_on" else "off"
 
-            # Cooldown key per-device + per-intent family
             cooldown_key = f"intent:fan_power:entity:{entity_id}"
             cooldown_seconds = decision.cooldown_seconds
 
-            # cooldown check (read-only here)
             if decision.decision == "allow" and cooldown_seconds > 0:
                 ok, remaining = self.cooldowns.can_run(cooldown_key, cooldown_seconds)
                 if not ok:
@@ -151,7 +120,7 @@ class Orchestrator:
                 actions.append(
                     ToolCall(
                         tool="tts.say",
-                        args={"message": "cool down"},
+                        args={"message": f"Fan blocked: {_humanize_reason(decision.reason)}"},
                         idempotency_key=new_idempotency_key(),
                         correlation_id=cid,
                     )
@@ -165,12 +134,69 @@ class Orchestrator:
                 "cooldown_seconds": cooldown_seconds,
             }
 
-        return _unknown_intent_plan(intent)
+        # ---------- enter_room ----------
+        if intent == "enter_room":
+            decision = evaluate_enter_room(state)
+            actions: list[ToolCall] = []
+
+            entity_id = args.get("entity_id", "switch.bedroom_light_switch")
+
+            cooldown_key = "intent:enter_room:room:bedroom"
+            cooldown_seconds = decision.cooldown_seconds
+
+            if decision.decision == "allow" and cooldown_seconds > 0:
+                ok, remaining = self.cooldowns.can_run(cooldown_key, cooldown_seconds)
+                if not ok:
+                    decision = PolicyDecision(
+                        decision="deny",
+                        reason=f"cooldown_active:{remaining}s_remaining",
+                        cooldown_seconds=cooldown_seconds,
+                        safety_checks=decision.safety_checks + ["cooldown"],
+                    )
+
+            if decision.decision == "allow":
+                entity_id = args.get("entity_id", "switch.bedroom_light_switch")
+
+                actions.append(
+                    ToolCall(
+                        tool="switch.set",
+                        args={"entity_id": entity_id, "state": "on"},
+                        idempotency_key=new_idempotency_key(),
+                        correlation_id=cid,
+                    )
+                )
+
+            return {
+                "correlation_id": cid,
+                "decision": decision,
+                "actions": actions,
+                "cooldown_key": cooldown_key,
+                "cooldown_seconds": cooldown_seconds,
+            }
+
+        # ---------- unknown intent (safe) ----------
+        decision = PolicyDecision(
+            decision="deny", reason=f"unknown_intent:{intent}", cooldown_seconds=0, safety_checks=[]
+        )
+        actions = [
+            ToolCall(
+                tool="tts.say",
+                args={"message": f"Blocked: {_humanize_reason(decision.reason)}"},
+                idempotency_key=new_idempotency_key(),
+                correlation_id=cid,
+            )
+        ]
+        return {
+            "correlation_id": cid,
+            "decision": decision,
+            "actions": actions,
+            "cooldown_key": None,
+            "cooldown_seconds": 0,
+        }
 
 
 def _humanize_reason(reason: str) -> str:
     if reason.startswith("cooldown_active:"):
-        # cooldown_active:59s_remaining
         try:
             part = reason.split(":", 1)[1]
             secs = part.split("s_", 1)[0]
@@ -183,6 +209,4 @@ def _humanize_reason(reason: str) -> str:
         return "I don’t detect anyone in the room."
     if reason.startswith("unknown_intent:"):
         return "I don’t recognize that request yet."
-    if reason == "ok":
-        return "OK"
     return reason

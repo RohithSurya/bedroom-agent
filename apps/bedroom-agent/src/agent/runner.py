@@ -46,8 +46,11 @@ class Runner:
                     attrs["brightness"] = round(int(attrs["brightness_pct"]) * 255 / 100)
                 except Exception:
                     pass
-            # Local mock doesn't track on/off; assume on when set is called
-            return {"entity_id": entity_id, "state": "on", "attributes": attrs}
+            return {
+                "entity_id": entity_id,
+                "state": attrs.get("state", "unknown"),
+                "attributes": attrs,
+            }
 
         return {"entity_id": entity_id, "state": "unknown", "attributes": {}}
 
@@ -60,37 +63,34 @@ class Runner:
                 "note": "state verification skipped",
             }
 
-        if call.tool == "light.set":
-            entity_id = str(call.args.get("entity_id", "light.bedroom_lamp"))
-            want_pct = int(call.args.get("brightness_pct", 15))
+        # if call.tool == "light.set":
+        #     entity_id = str(call.args.get("entity_id", "switch.bedroom_light_switch"))
 
-            ent = self._read_entity_state(entity_id)
-            attrs = ent.get("attributes", {}) or {}
+        #     ent = self._read_entity_state(entity_id)
+        #     attrs = ent.get("attributes", {}) or {}
 
-            got_pct = None
+        #     got_pct = None
 
-            # HA: attributes.brightness is 0-255
-            if "brightness" in attrs and attrs["brightness"] is not None:
-                try:
-                    got_pct = round((int(attrs["brightness"]) * 100) / 255)
-                except Exception:
-                    got_pct = None
+        #     # HA: attributes.brightness is 0-255
+        #     if "brightness" in attrs and attrs["brightness"] is not None:
+        #         try:
+        #             got_pct = round((int(attrs["brightness"]) * 100) / 255)
+        #         except Exception:
+        #             got_pct = None
 
-            # Local mock: may store brightness_pct directly
-            if got_pct is None and "brightness_pct" in attrs:
-                try:
-                    got_pct = int(attrs["brightness_pct"])
-                except Exception:
-                    got_pct = None
+        #     # Local mock: may store brightness_pct directly
+        #     if got_pct is None and "brightness_pct" in attrs:
+        #         try:
+        #             got_pct = int(attrs["brightness_pct"])
+        #         except Exception:
+        #             got_pct = None
 
-            verified = bool(result.ok) and (got_pct is not None) and (abs(got_pct - want_pct) <= 2)
-            return {
-                "verified": verified,
-                "entity_id": entity_id,
-                "want_pct": want_pct,
-                "got_pct": got_pct,
-                "raw_state": ent.get("state"),
-            }
+        #     verified = bool(result.ok) and (got_pct is not None) and (abs(got_pct - want_pct) <= 2)
+        #     return {
+        #         "verified": verified,
+        #         "entity_id": entity_id,
+        #         "raw_state": ent.get("state"),
+        #     }
 
         if call.tool == "switch.set":
             entity_id = str(call.args.get("entity_id", "switch.bedroom_fan_plug"))

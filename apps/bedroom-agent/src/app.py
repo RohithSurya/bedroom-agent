@@ -6,11 +6,15 @@ from typing import Any, Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from agent.mqtt_listener import Z2MMqttListener
+from memory.sqlite_kv import SqliteKV
 from agent.orchestrator import Orchestrator
 from agent.nl_router import NLRouter
 from agent.runner import Runner
+from contracts.ha import ToolCall
 from core.config import Settings
 from core.cooldowns import CooldownStore
+from core.ids import new_correlation_id, new_idempotency_key
 from core.logging_jsonl import JsonlLogger
 from llm.ollama_client import OllamaClient
 from tools.ha_http_client import HAToolClientHTTP
@@ -19,7 +23,7 @@ from tools.ha_real_client import HAToolClientReal
 
 
 class AgentRunRequest(BaseModel):
-    intent: Literal["night_mode", "fan_on", "fan_off"]
+    intent: Literal["night_mode", "fan_on", "fan_off", "enter_room"]
     args: dict[str, Any] = Field(default_factory=dict)
     state: dict[str, Any] = Field(default_factory=dict)
 
@@ -52,6 +56,7 @@ class AgentAppState:
             timeout_s=float(settings.LLM_TIMEOUT_S),
         )
         self.router = NLRouter(llm=self.llm)
+        self.kv = SqliteKV(settings.SQLITE_PATH)
 
         self.orchestrator = Orchestrator(cooldowns=cooldowns)
         self.runner = Runner(
@@ -59,6 +64,104 @@ class AgentAppState:
             cooldowns=cooldowns,
             logger=self.logger,
         )
+
+        self.mqtt = Z2MMqttListener(
+            mqtt_host=settings.MQTT_HOST,
+            mqtt_port=int(settings.MQTT_PORT),
+            mqtt_username=settings.MQTT_USERNAME,
+            mqtt_password=settings.MQTT_PASSWORD,
+            door_topic=settings.Z2M_DOOR_TOPIC,
+            presence_topic=settings.Z2M_PRESENCE_TOPIC,
+            tz_name=settings.TIMEZONE,
+            quiet_start=settings.QUIET_HOURS_START,
+            quiet_end=settings.QUIET_HOURS_END,
+            entry_window_s=int(settings.ENTRY_WINDOW_S),
+            entry_cooldown_s=int(settings.ENTRY_COOLDOWN_S),
+            vacancy_off_delay_s=int(settings.VACANCY_OFF_DELAY_S),
+            kv=self.kv,
+            on_enter=self._on_enter_room,
+            on_vacant=self._on_room_vacant,
+        )
+
+    def _on_enter_room(self, meta: dict[str, Any]) -> None:
+        entity_id = self.settings.ENTRY_LIGHT_ENTITY_ID
+        quiet = bool(meta.get("quiet_hours", False))
+        domain = entity_id.split(".", 1)[0]
+
+        # Switch can’t dim: skip during quiet hours to avoid blasting light at night
+        if quiet and domain == "switch":
+            self.kv.append_event("enter_room_skipped_quiet_hours_switch", {"entity_id": entity_id})
+            return
+
+        # Skip if already on
+        already_on = False
+        if hasattr(self.runner.executor, "read_entity_state"):
+            st = self.runner.executor.read_entity_state(entity_id)
+            already_on = str(st.get("state", "")).lower() == "on"
+
+        if already_on:
+            self.kv.append_event("enter_room_skipped_already_on", {"entity_id": entity_id})
+            return
+
+        state = {
+            "presence": True,
+            "guest_mode": bool(self.kv.get("prefs", "guest_mode", False)),
+        }
+
+        plan = self.orchestrator.handle_request(
+            intent="enter_room",
+            args={"entity_id": entity_id},
+            state=state,
+        )
+
+        self.runner.execute_actions(
+            correlation_id=plan["correlation_id"],
+            actions=plan["actions"],
+            cooldown_key=plan.get("cooldown_key"),
+            cooldown_seconds=int(plan.get("cooldown_seconds", 0)),
+        )
+
+    def _on_room_vacant(self, meta: dict[str, Any]) -> None:
+        entity_id = self.settings.ENTRY_LIGHT_ENTITY_ID
+        domain = entity_id.split(".", 1)[0]
+
+        if domain not in {"switch", "light"}:
+            self.kv.append_event("vacancy_off_skipped_unsupported_entity", {"entity_id": entity_id})
+            return
+
+        if bool(self.kv.get("belief", "presence", False)):
+            self.kv.append_event("vacancy_off_skipped_presence_returned", {"entity_id": entity_id})
+            return
+
+        already_on = False
+        if hasattr(self.runner.executor, "read_entity_state"):
+            st = self.runner.executor.read_entity_state(entity_id)
+            already_on = str(st.get("state", "")).lower() == "on"
+
+        if not already_on:
+            self.kv.append_event("vacancy_off_skipped_already_off", {"entity_id": entity_id})
+            return
+
+        tool_name = "switch.set" if domain == "switch" else "light.set"
+        off_args = {"entity_id": entity_id, "state": "off"}
+        if tool_name == "light.set":
+            off_args["state"] = "off"
+
+        correlation_id = new_correlation_id()
+        self.runner.execute_actions(
+            correlation_id=correlation_id,
+            actions=[
+                ToolCall(
+                    tool=tool_name,
+                    args=off_args,
+                    idempotency_key=new_idempotency_key(),
+                    correlation_id=correlation_id,
+                )
+            ],
+            cooldown_key=None,
+            cooldown_seconds=0,
+        )
+        self.kv.append_event("vacancy_off_executed", {"entity_id": entity_id, **meta})
 
 
 def _build_executor(
@@ -90,12 +193,18 @@ async def lifespan(app: FastAPI):
     agent_state = AgentAppState(settings)
     app.state.agent = agent_state
 
-    # Prime TTS cache for common phrases to avoid startup delay
+    # Prime TTS cache for common phrases
     if isinstance(agent_state.runner.executor, HAToolClientReal):
         for phrase in ["Fan on.", "Fan off.", "Denied.", "Guest mode."]:
             agent_state.runner.executor.prime_tts(phrase)
 
-    yield
+    # Start MQTT listener
+    agent_state.mqtt.start()
+
+    try:
+        yield
+    finally:
+        agent_state.mqtt.stop()
 
 
 app = FastAPI(title="Bedroom Agent", lifespan=lifespan)

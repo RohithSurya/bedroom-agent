@@ -113,11 +113,17 @@ class HAToolClientReal:
         if tool == "light.set":
             entity_id = str(call.args.get("entity_id"))
             payload: Dict[str, Any] = {"entity_id": entity_id}
+            state = str(call.args.get("state", "on")).lower()
+            if state not in ("on", "off"):
+                return ToolResult(
+                    ok=False, tool=tool, details={"error": "invalid_state", "state": state}
+                )
             if "brightness_pct" in call.args:
                 payload["brightness_pct"] = int(call.args["brightness_pct"])
             if "transition_s" in call.args:
                 payload["transition"] = float(call.args["transition_s"])
-            return self._post_service("light", "turn_on", payload)
+            service = "turn_on" if state == "on" else "turn_off"
+            return self._post_service("light", service, payload)
 
         # fan plug
         if tool == "switch.set":
