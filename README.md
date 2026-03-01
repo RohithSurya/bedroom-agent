@@ -1,3 +1,9 @@
+# This is the correct Youtube URL: https://youtu.be/oJxBTXyXbbU.
+
+The one published in the hackeriterate is the wrong link. Please consider my mistake and use this link to watch the demo
+
+
+
 # bedroom-agent
 
 Edge-Native Autonomous Intelligence using LLM centric logic that control the entities of the room. 
