@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import time
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from agent.decision_engine import DecisionEngine
 from agent.mqtt_listener import Z2MMqttListener
 from agent.status_service import StatusService
 from memory.sqlite_kv import SqliteKV
@@ -26,7 +28,17 @@ from vision.room_analyzer import BedroomRoomAnalyzer
 
 
 class AgentRunRequest(BaseModel):
-    intent: Literal["night_mode", "fan_on", "fan_off", "enter_room"]
+    intent: Literal[
+        "night_mode",
+        "fan_on",
+        "fan_off",
+        "enter_room",
+        "sleep_mode",
+        "focus_start",
+        "focus_end",
+        "comfort_adjust",
+        "no_action",
+    ]
     args: dict[str, Any] = Field(default_factory=dict)
     state: dict[str, Any] = Field(default_factory=dict)
 
@@ -58,6 +70,15 @@ class AgentAppState:
             model=settings.LLM_MODEL,
             timeout_s=float(settings.LLM_TIMEOUT_S),
         )
+        self.decision_llm = (
+            OllamaClient(
+                base_url=settings.LLM_BASE_URL,
+                model=settings.LLM_MODEL,
+                timeout_s=float(settings.LLM_DECISION_TIMEOUT_S),
+            )
+            if bool(settings.LLM_DECISION_ENABLED)
+            else None
+        )
         self.router = NLRouter(llm=self.llm)
         self.kv = SqliteKV(settings.SQLITE_PATH)
         self.status_service = StatusService(kv=self.kv, llm=self.llm, tz_name=settings.TIMEZONE)
@@ -79,6 +100,13 @@ class AgentAppState:
             enabled=bool(settings.VISION_ANALYSIS_ENABLED),
             prompt_profile=settings.VISION_PROMPT_PROFILE,
             max_output_tokens=int(settings.VISION_MAX_OUTPUT_TOKENS),
+        )
+        self.decision_engine = DecisionEngine(
+            kv=self.kv,
+            llm=self.decision_llm,
+            max_events=int(settings.LLM_DECISION_MAX_EVENTS),
+            min_confidence=float(settings.LLM_DECISION_MIN_CONFIDENCE),
+            use_vision=bool(settings.LLM_DECISION_USE_VISION),
         )
 
         self.orchestrator = Orchestrator(cooldowns=cooldowns)
@@ -105,6 +133,96 @@ class AgentAppState:
             on_enter=self._on_enter_room,
             on_vacant=self._on_room_vacant,
         )
+
+    @staticmethod
+    def _coerce_float_state(raw: dict[str, Any]) -> float | None:
+        try:
+            return float(raw.get("state"))
+        except Exception:
+            return None
+
+    def _build_vision_state(self, max_age_s: int = 120) -> dict[str, Any]:
+        latest = self.kv.get("vision", "latest_bedroom_analysis", None)
+        if not isinstance(latest, dict):
+            return {"available": False}
+
+        captured_at_ms = latest.get("captured_at_ms")
+        age_s = None
+        if isinstance(captured_at_ms, (int, float)):
+            age_s = max(0.0, time.time() - (float(captured_at_ms) / 1000.0))
+        if age_s is not None and age_s > max_age_s:
+            return {"available": False, "age_s": round(age_s, 1)}
+
+        return {
+            "available": True,
+            "occupied": latest.get("occupied"),
+            "bed_state": latest.get("bed_state"),
+            "desk_state": latest.get("desk_state"),
+            "focus_readiness": latest.get("focus_readiness"),
+            "sleep_readiness": latest.get("sleep_readiness"),
+            "age_s": round(age_s, 1) if age_s is not None else None,
+        }
+
+    def build_runtime_state(self, extra_state: dict[str, Any] | None = None) -> dict[str, Any]:
+        beliefs = self.kv.get_namespace("belief")
+        prefs = self.kv.get_namespace("prefs")
+
+        light_entity_id = self.settings.ENTRY_LIGHT_ENTITY_ID
+        fan_entity_id = self.settings.BEDROOM_FAN_ENTITY_ID
+        ac_entity_id = self.settings.BEDROOM_AC_ENTITY_ID
+        temp_entity_id = self.settings.TEMP_SENSOR_ENTITY_ID
+        humidity_entity_id = self.settings.HUMIDITY_SENSOR_ENTITY_ID
+
+        light_raw = self.runner.read_entity_state(light_entity_id) if light_entity_id else {}
+        fan_raw = self.runner.read_entity_state(fan_entity_id) if fan_entity_id else {}
+        ac_raw = self.runner.read_entity_state(ac_entity_id) if ac_entity_id else {}
+        temp_raw = self.runner.read_entity_state(temp_entity_id) if temp_entity_id else {}
+        humidity_raw = self.runner.read_entity_state(humidity_entity_id) if humidity_entity_id else {}
+
+        temperature_c = self._coerce_float_state(temp_raw)
+        humidity_pct = self._coerce_float_state(humidity_raw)
+        ac_attrs = ac_raw.get("attributes", {}) if isinstance(ac_raw, dict) else {}
+        ac_available = bool(ac_entity_id) and not str(ac_raw.get("error", "")).strip()
+
+        state = {
+            "presence": bool(beliefs.get("presence", False)),
+            "door_open": bool(beliefs.get("door_open", False)),
+            "guest_mode": bool(prefs.get("guest_mode", False)),
+            "temperature_entity_id": temp_entity_id,
+            "humidity_entity_id": humidity_entity_id,
+            "temperature_c": temperature_c,
+            "humidity_pct": humidity_pct,
+            "light_entity_id": light_entity_id,
+            "light_state": str(light_raw.get("state", "unknown")).lower(),
+            "fan_entity_id": fan_entity_id,
+            "fan_state": str(fan_raw.get("state", "unknown")).lower(),
+            "ac_entity_id": ac_entity_id,
+            "ac_available": ac_available,
+            "ac_state": str(ac_raw.get("state", "unknown")).lower(),
+            "ac_hvac_mode": str(ac_attrs.get("hvac_mode", ac_raw.get("state", "unknown"))).lower(),
+            "ac_target_temp_c": ac_attrs.get("temperature"),
+            "ac_fan_mode": str(ac_attrs.get("fan_mode", "")).lower() or None,
+            "comfort_trigger_temp_c": float(self.settings.COMFORT_TRIGGER_TEMP_C),
+            "comfort_trigger_humidity_pct": float(self.settings.COMFORT_TRIGGER_HUMIDITY_PCT),
+            "comfort_target_temp_c": int(self.settings.COMFORT_TARGET_TEMP_C),
+            "sleep_target_temp_c": int(self.settings.SLEEP_TARGET_TEMP_C),
+            "focus_mode_enable_fan": bool(self.settings.FOCUS_MODE_ENABLE_FAN),
+            "focus_mode_enable_climate": bool(self.settings.FOCUS_MODE_ENABLE_CLIMATE),
+            "sleep_mode_enable_climate": bool(self.settings.SLEEP_MODE_ENABLE_CLIMATE),
+            "comfort_use_fan_fallback": bool(self.settings.COMFORT_USE_FAN_FALLBACK),
+            "vision": self._build_vision_state(),
+        }
+        state["room_uncomfortable"] = bool(
+            (temperature_c is not None and temperature_c >= float(self.settings.COMFORT_TRIGGER_TEMP_C))
+            or (
+                humidity_pct is not None
+                and humidity_pct >= float(self.settings.COMFORT_TRIGGER_HUMIDITY_PCT)
+            )
+        )
+
+        for key, value in (extra_state or {}).items():
+            state.setdefault(key, value)
+        return state
 
     def _on_enter_room(self, meta: dict[str, Any]) -> None:
         entity_id = self.settings.ENTRY_LIGHT_ENTITY_ID
@@ -246,10 +364,11 @@ def health() -> dict[str, Any]:
 @app.post("/agent/run")
 def run_agent(req: AgentRunRequest) -> dict[str, Any]:
     try:
+        state = app.state.agent.build_runtime_state(req.state)
         plan = app.state.agent.orchestrator.handle_request(
             intent=req.intent,
             args=req.args,
-            state=req.state,
+            state=state,
         )
         execution = app.state.agent.runner.execute_actions(
             correlation_id=plan["correlation_id"],
@@ -279,7 +398,8 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
     Later you'll extend intents like analyze_bedroom/focus_start/etc.
     """
     try:
-        intent, args = app.state.agent.router.route(text=req.text, state=req.state)
+        state = app.state.agent.build_runtime_state(req.state)
+        intent, args = app.state.agent.router.route(text=req.text, state=state)
         if intent == "status":
             result = app.state.agent.status_service.handle_query(args.get("query", req.text))
             return {
@@ -296,17 +416,110 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                 "result": result,
             }
 
-        if intent in {"focus_start", "focus_end"}:
-            return {
-                "mode": "info",
-                "input": {"text": req.text, "intent": intent, "args": args},
-                "result": {
-                    "summary": "Focus mode is not implemented in this demo build yet.",
-                    "structured": {"supported": False, "intent": intent},
+        if intent == "decision_request":
+            agent = app.state.agent
+            agent.kv.append_event(
+                "llm_decision_requested",
+                {
+                    "source": "user_chat",
+                    "trigger": "chat_request",
+                    "user_text": req.text,
+                    "temperature_c": state.get("temperature_c"),
+                    "humidity_pct": state.get("humidity_pct"),
                 },
+            )
+            choice = agent.decision_engine.choose_intent(
+                source="user_chat",
+                trigger="chat_request",
+                user_text=req.text,
+                state=state,
+            )
+            agent.kv.append_event(
+                "llm_decision_returned",
+                {
+                    "source": choice.source,
+                    "trigger": choice.trigger,
+                    "user_text": req.text,
+                    "chosen_intent": choice.intent,
+                    "confidence": choice.confidence,
+                    "rationale": choice.rationale,
+                    "reasoning_tags": choice.reasoning_tags,
+                    "fallback_used": choice.fallback_used,
+                    "temperature_c": state.get("temperature_c"),
+                    "humidity_pct": state.get("humidity_pct"),
+                    "ac_available": state.get("ac_available"),
+                },
+            )
+            if choice.fallback_used:
+                agent.kv.append_event(
+                    "llm_decision_fallback_used",
+                    {"user_text": req.text, "chosen_intent": choice.intent},
+                )
+
+            if choice.intent == "no_action":
+                agent.kv.append_event(
+                    "llm_intent_executed",
+                    {"chosen_intent": choice.intent, "executed_tools": [], "success": True},
+                )
+                return {
+                    "mode": "action",
+                    "input": {"text": req.text, "intent": intent, "args": args},
+                    "decision": {
+                        "chosen_intent": choice.intent,
+                        "confidence": choice.confidence,
+                        "rationale": choice.rationale,
+                        "reasoning_tags": choice.reasoning_tags,
+                        "fallback_used": choice.fallback_used,
+                    },
+                    "policy": {"decision": "allow", "reason": "no_action"},
+                    "actions": [],
+                    "execution": {"success": True, "failures": [], "executed_tools": []},
+                }
+
+            plan = agent.orchestrator.handle_request(intent=choice.intent, args=choice.args, state=state)
+            policy = plan["decision"].model_dump()
+            if plan["decision"].decision == "deny":
+                agent.kv.append_event(
+                    "llm_intent_rejected_by_policy",
+                    {
+                        "chosen_intent": choice.intent,
+                        "reason": plan["decision"].reason,
+                        "temperature_c": state.get("temperature_c"),
+                        "humidity_pct": state.get("humidity_pct"),
+                    },
+                )
+            execution = agent.runner.execute_actions(
+                correlation_id=plan["correlation_id"],
+                actions=plan["actions"],
+                cooldown_key=plan.get("cooldown_key"),
+                cooldown_seconds=int(plan.get("cooldown_seconds", 0)),
+            )
+            agent.kv.append_event(
+                "llm_intent_executed",
+                {
+                    "chosen_intent": choice.intent,
+                    "policy_decision": policy["decision"],
+                    "policy_reason": policy["reason"],
+                    "executed_tools": execution.get("executed_tools", []),
+                    "success": execution.get("success", False),
+                },
+            )
+            return {
+                "mode": "action",
+                "input": {"text": req.text, "intent": intent, "args": args},
+                "decision": {
+                    "chosen_intent": choice.intent,
+                    "confidence": choice.confidence,
+                    "rationale": choice.rationale,
+                    "reasoning_tags": choice.reasoning_tags,
+                    "fallback_used": choice.fallback_used,
+                },
+                "policy": policy,
+                "actions": [a.model_dump() for a in plan["actions"]],
+                "execution": execution,
             }
 
-        plan = app.state.agent.orchestrator.handle_request(intent=intent, args=args, state=req.state)
+        plan = app.state.agent.orchestrator.handle_request(intent=intent, args=args, state=state)
         execution = app.state.agent.runner.execute_actions(
             correlation_id=plan["correlation_id"],
             actions=plan["actions"],

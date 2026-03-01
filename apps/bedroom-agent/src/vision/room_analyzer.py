@@ -199,7 +199,10 @@ class BedroomRoomAnalyzer:
             coerced["query_answer"] = coerced.get("summary", "")
         if coerced.get("focus_readiness", 0.0) == 0.0 and coerced.get("desk_state") == "active":
             coerced["focus_readiness"] = 0.6
-        if coerced.get("sleep_readiness", 0.0) == 0.0 and coerced.get("bed_state") in {"made", "partial"}:
+        if coerced.get("sleep_readiness", 0.0) == 0.0 and coerced.get("bed_state") in {
+            "made",
+            "partial",
+        }:
             coerced["sleep_readiness"] = 0.4 if coerced["bed_state"] == "made" else 0.2
         return coerced
 
@@ -282,11 +285,19 @@ class BedroomRoomAnalyzer:
     def _infer_occupied(self, answer_text: str, issues: list[Any]) -> bool:
         issue_text = " ".join(str(issue).lower() for issue in issues)
         combined = f"{answer_text} {issue_text}"
-        if any(phrase in combined for phrase in ("no person", "nobody", "empty room", "not occupied")):
+        if any(
+            phrase in combined for phrase in ("no person", "nobody", "empty room", "not occupied")
+        ):
             return False
         if any(
             phrase in combined
-            for phrase in ("person visible", "someone visible", "occupied", "person at desk", "person on bed")
+            for phrase in (
+                "person visible",
+                "someone visible",
+                "occupied",
+                "person at desk",
+                "person on bed",
+            )
         ):
             return True
         return False
@@ -306,15 +317,12 @@ class BedroomRoomAnalyzer:
             return True
         if self._is_specific_query(query):
             return not query_answer
-        return (
-            not summary
-            or (
-                not issues
-                and bed_state == "made"
-                and desk_state == "tidy"
-                and float(focus or 0.0) == 0.0
-                and float(sleep or 0.0) == 0.0
-            )
+        return not summary or (
+            not issues
+            and bed_state == "made"
+            and desk_state == "tidy"
+            and float(focus or 0.0) == 0.0
+            and float(sleep or 0.0) == 0.0
         )
 
     def _is_specific_query(self, query: str) -> bool:
@@ -384,16 +392,6 @@ class BedroomRoomAnalyzer:
             "fold and flatten",
             "straighten blanket",
             "minor bedding adjustment",
-        )
-        bed_issue_markers = (
-            "bed",
-            "blanket",
-            "comforter",
-            "duvet",
-            "sheet",
-            "pillow",
-            "mattress",
-            "bedding",
         )
 
         if any(marker in evidence_text for marker in neat_markers) and not any(
@@ -517,7 +515,9 @@ class BedroomRoomAnalyzer:
 
     def _compute_focus_readiness(self, out: dict[str, Any]) -> float:
         desk_state = str(out.get("desk_state", "active")).strip().lower()
-        issues = [str(issue).strip().lower() for issue in out.get("issues", []) if str(issue).strip()]
+        issues = [
+            str(issue).strip().lower() for issue in out.get("issues", []) if str(issue).strip()
+        ]
 
         base = {
             "tidy": 0.8,
@@ -539,7 +539,9 @@ class BedroomRoomAnalyzer:
 
     def _compute_sleep_readiness(self, out: dict[str, Any]) -> float:
         bed_state = str(out.get("bed_state", "made")).strip().lower()
-        issues = [str(issue).strip().lower() for issue in out.get("issues", []) if str(issue).strip()]
+        issues = [
+            str(issue).strip().lower() for issue in out.get("issues", []) if str(issue).strip()
+        ]
         occupied = bool(out.get("occupied", False))
 
         base = {

@@ -21,3 +21,39 @@ def test_runner_emits_fallback_tts_on_light_failure(tmp_path):
 
     assert run_out["success"] is False
     assert any("couldn't dim the lights" in msg.lower() for msg in ex.device_state["tts"])
+
+
+def test_runner_verifies_climate_actions(tmp_path):
+    logger = JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York")
+    ex = ToolExecutor(mode="active")
+    runner = Runner(executor=ex, logger=logger, retry_attempts=0)
+
+    run_out = runner.execute_actions(
+        correlation_id="cid",
+        actions=[
+            Orchestrator()._cooling_actions(
+                "cid",
+                entity_id="climate.bedroom_ac",
+                temperature=24,
+                fan_mode="auto",
+            )[0],
+            Orchestrator()._cooling_actions(
+                "cid",
+                entity_id="climate.bedroom_ac",
+                temperature=24,
+                fan_mode="auto",
+            )[1],
+            Orchestrator()._cooling_actions(
+                "cid",
+                entity_id="climate.bedroom_ac",
+                temperature=24,
+                fan_mode="auto",
+            )[2],
+        ],
+    )
+
+    assert run_out["success"] is True
+    climate = ex.device_state["climate"]["climate.bedroom_ac"]
+    assert climate["hvac_mode"] == "cool"
+    assert climate["temperature"] == 24
+    assert climate["fan_mode"] == "auto"

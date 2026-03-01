@@ -22,6 +22,9 @@ class Runner:
     )
     retry_attempts: int = 1  # v0 default
 
+    def read_entity_state(self, entity_id: str) -> dict[str, Any]:
+        return self._read_entity_state(entity_id)
+
     def _read_entity_state(self, entity_id: str) -> dict[str, Any]:
         """
         Returns an HA-like entity state dict:
@@ -54,6 +57,14 @@ class Runner:
             return {
                 "entity_id": entity_id,
                 "state": attrs.get("state", "unknown"),
+                "attributes": attrs,
+            }
+
+        if entity_id.startswith("climate."):
+            attrs = dict(s.get("climate", {}).get(entity_id, {}))
+            return {
+                "entity_id": entity_id,
+                "state": attrs.get("state", attrs.get("hvac_mode", "unknown")),
                 "attributes": attrs,
             }
 
@@ -123,6 +134,33 @@ class Runner:
                 "message": msg,
                 "note": "no_state_verifier_for_tts_backend",
             }
+
+        if call.tool == "climate.set_mode":
+            entity_id = str(call.args.get("entity_id", "climate.bedroom_ac"))
+            want = str(call.args.get("hvac_mode", "")).lower()
+            ent = self._read_entity_state(entity_id)
+            attrs = ent.get("attributes", {}) or {}
+            got = str(attrs.get("hvac_mode", ent.get("state", ""))).lower()
+            verified = bool(result.ok) and got == want
+            return {"verified": verified, "entity_id": entity_id, "want": want, "got": got}
+
+        if call.tool == "climate.set_temperature":
+            entity_id = str(call.args.get("entity_id", "climate.bedroom_ac"))
+            want = call.args.get("temperature")
+            ent = self._read_entity_state(entity_id)
+            attrs = ent.get("attributes", {}) or {}
+            got = attrs.get("temperature")
+            verified = bool(result.ok) and got == want
+            return {"verified": verified, "entity_id": entity_id, "want": want, "got": got}
+
+        if call.tool == "climate.set_fan_mode":
+            entity_id = str(call.args.get("entity_id", "climate.bedroom_ac"))
+            want = str(call.args.get("fan_mode", "")).lower()
+            ent = self._read_entity_state(entity_id)
+            attrs = ent.get("attributes", {}) or {}
+            got = str(attrs.get("fan_mode", "")).lower()
+            verified = bool(result.ok) and got == want
+            return {"verified": verified, "entity_id": entity_id, "want": want, "got": got}
 
         return {"verified": bool(result.ok), "note": "no verifier for tool"}
 

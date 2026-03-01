@@ -31,7 +31,18 @@ class ToolExecutor:
         default_factory=lambda: {
             "lights": {"light.bedroom_lamp": {"brightness_pct": 100}},
             "tts": [],
-            "switches": {"switch.bedroom_fan_plug": {"state": "off"}},
+            "switches": {
+                "switch.bedroom_fan_plug": {"state": "off"},
+                "switch.bedroom_light_switch": {"state": "off"},
+            },
+            "climate": {
+                "climate.bedroom_ac": {
+                    "state": "off",
+                    "hvac_mode": "off",
+                    "temperature": 30,
+                    "fan_mode": "low",
+                }
+            },
         }
     )
 
@@ -156,6 +167,58 @@ class ToolExecutor:
                     ok=True,
                     tool=call.tool,
                     details={"entity_id": entity_id, "state": state},
+                )
+
+        elif call.tool == "climate.set_mode":
+            entity_id = str(call.args.get("entity_id", "climate.bedroom_ac"))
+            hvac_mode = str(call.args.get("hvac_mode", "off")).lower()
+            if hvac_mode not in ("off", "cool", "fan_only", "auto"):
+                result = ToolResult(
+                    ok=False, tool=call.tool, details={"error": "invalid_hvac_mode", "hvac_mode": hvac_mode}
+                )
+            else:
+                self.device_state["climate"].setdefault(entity_id, {})
+                self.device_state["climate"][entity_id]["state"] = hvac_mode
+                self.device_state["climate"][entity_id]["hvac_mode"] = hvac_mode
+                result = ToolResult(
+                    ok=True,
+                    tool=call.tool,
+                    details={"entity_id": entity_id, "hvac_mode": hvac_mode},
+                )
+
+        elif call.tool == "climate.set_temperature":
+            entity_id = str(call.args.get("entity_id", "climate.bedroom_ac"))
+            try:
+                temperature = int(call.args.get("temperature"))
+            except Exception:
+                result = ToolResult(
+                    ok=False,
+                    tool=call.tool,
+                    details={"error": "invalid_temperature", "temperature": call.args.get("temperature")},
+                )
+            else:
+                self.device_state["climate"].setdefault(entity_id, {})
+                self.device_state["climate"][entity_id]["temperature"] = temperature
+                result = ToolResult(
+                    ok=True,
+                    tool=call.tool,
+                    details={"entity_id": entity_id, "temperature": temperature},
+                )
+
+        elif call.tool == "climate.set_fan_mode":
+            entity_id = str(call.args.get("entity_id", "climate.bedroom_ac"))
+            fan_mode = str(call.args.get("fan_mode", "auto")).lower()
+            if fan_mode not in ("auto", "low", "medium", "high"):
+                result = ToolResult(
+                    ok=False, tool=call.tool, details={"error": "invalid_fan_mode", "fan_mode": fan_mode}
+                )
+            else:
+                self.device_state["climate"].setdefault(entity_id, {})
+                self.device_state["climate"][entity_id]["fan_mode"] = fan_mode
+                result = ToolResult(
+                    ok=True,
+                    tool=call.tool,
+                    details={"entity_id": entity_id, "fan_mode": fan_mode},
                 )
 
         else:

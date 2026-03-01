@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
+from agent.intent_registry import ROUTER_INTENTS
 from llm.ollama_client import OllamaClient
 
 
@@ -10,10 +11,13 @@ AllowedIntent = Literal[
     "night_mode",
     "fan_on",
     "fan_off",
-    "analyze_bedroom",
+    "sleep_mode",
     "focus_start",
     "focus_end",
+    "comfort_adjust",
+    "analyze_bedroom",
     "status",
+    "decision_request",
 ]
 
 
@@ -24,15 +28,7 @@ ROUTER_SCHEMA: dict[str, Any] = {
     "properties": {
         "intent": {
             "type": "string",
-            "enum": [
-                "night_mode",
-                "fan_on",
-                "fan_off",
-                "analyze_bedroom",
-                "focus_start",
-                "focus_end",
-                "status",
-            ],
+            "enum": list(ROUTER_INTENTS),
         },
         "args": {"type": "object"},
     },
@@ -60,6 +56,42 @@ class NLRouter:
             return "fan_on", {}
         if "fan" in t and ("off" in t or "stop" in t):
             return "fan_off", {}
+        if ("end" in t or "stop" in t or "off" in t) and ("focus" in t or "deep work" in t):
+            return "focus_end", {}
+        if any(
+            phrase in t
+            for phrase in (
+                "make the room ready for sleep",
+                "start sleep mode",
+                "sleep mode",
+                "help me wind down",
+                "wind down",
+                "bedtime",
+            )
+        ):
+            return "sleep_mode", {}
+        if any(
+            phrase in t
+            for phrase in (
+                "set the room up for focus",
+                "start focus mode",
+                "help me focus",
+                "focus mode",
+            )
+        ):
+            return "focus_start", {}
+        if any(
+            phrase in t
+            for phrase in (
+                "make the room comfortable",
+                "cool the room",
+                "cool room",
+                "adjust comfort",
+            )
+        ):
+            return "comfort_adjust", {}
+        if "what should happen now" in t:
+            return "decision_request", {}
         if any(
             phrase in t
             for phrase in (
@@ -74,10 +106,6 @@ class NLRouter:
             )
         ):
             return "analyze_bedroom", {}
-        if "start" in t and ("focus" in t or "deep work" in t):
-            return "focus_start", {}
-        if "end" in t and ("focus" in t or "deep work" in t):
-            return "focus_end", {}
         if any(
             k in t
             for k in [
@@ -102,8 +130,11 @@ class NLRouter:
             "Allowed intents:\n"
             "- night_mode: dim lights + announce\n"
             "- fan_on / fan_off\n"
+            "- sleep_mode: prepare the room for sleep\n"
+            "- focus_start / focus_end: start or end focus mode\n"
+            "- comfort_adjust: cool the room or make it more comfortable\n"
             "- analyze_bedroom: run camera analysis for bed/desk/floor\n"
-            "- focus_start / focus_end\n"
+            "- decision_request: user is asking an ambiguous high-level question like what should happen now\n"
             "- status: answer questions about current state / sessions\n\n"
             f"User text: {text!r}\n"
             'Return: {"intent": ..., "args": {...}}\n'

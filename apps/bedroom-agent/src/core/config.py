@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "http://host.docker.internal:11434"
     LLM_MODEL: str = "ministral-3:3b"
     LLM_TIMEOUT_S: float = 60.0
+    LLM_DECISION_ENABLED: bool = True
+    LLM_DECISION_MIN_CONFIDENCE: float = 0.55
+    LLM_DECISION_TIMEOUT_S: float = 20.0
+    LLM_DECISION_USE_VISION: bool = True
+    LLM_DECISION_MAX_EVENTS: int = 8
 
     # SQLite (belief state + lightweight memory)
     SQLITE_PATH: str = "data/memory.sqlite"
@@ -37,7 +42,19 @@ class Settings(BaseSettings):
     ENTRY_WINDOW_S: int = 12  # door open -> presence true within this window triggers
     ENTRY_COOLDOWN_S: int = 90  # minimum time between triggers
     ENTRY_LIGHT_ENTITY_ID: str = "switch.bedroom_light_switch"
+    BEDROOM_FAN_ENTITY_ID: str = "switch.bedroom_fan_plug"
+    BEDROOM_AC_ENTITY_ID: str = "climate.bedroom_ac"
     VACANCY_OFF_DELAY_S: int = 120  # turn lights off after this much no-presence time
+    TEMP_SENSOR_ENTITY_ID: str = "sensor.temp_humidity_sensor_temperature"
+    HUMIDITY_SENSOR_ENTITY_ID: str = "sensor.temp_humidity_sensor_humidity"
+    COMFORT_TRIGGER_TEMP_C: float = 25.0
+    COMFORT_TRIGGER_HUMIDITY_PCT: float = 65.0
+    COMFORT_TARGET_TEMP_C: int = 24
+    SLEEP_TARGET_TEMP_C: int = 27
+    FOCUS_MODE_ENABLE_FAN: bool = True
+    FOCUS_MODE_ENABLE_CLIMATE: bool = True
+    SLEEP_MODE_ENABLE_CLIMATE: bool = True
+    COMFORT_USE_FAN_FALLBACK: bool = True
 
     # Vision / snapshot analysis
     CAMERA_MODE: str = "device"  # "ha_snapshot", "file", or "device"

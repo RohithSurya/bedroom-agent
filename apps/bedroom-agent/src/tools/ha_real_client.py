@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from json import tool
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 import requests
 
 from contracts.ha import ToolCall, ToolResult
@@ -135,6 +134,48 @@ class HAToolClientReal:
                 )
             svc = "turn_on" if state == "on" else "turn_off"
             return self._post_service("switch", svc, {"entity_id": entity_id})
+
+        if tool == "climate.set_mode":
+            entity_id = str(call.args.get("entity_id"))
+            hvac_mode = str(call.args.get("hvac_mode", "off")).lower()
+            if hvac_mode not in ("off", "cool", "fan_only", "auto"):
+                return ToolResult(
+                    ok=False, tool=tool, details={"error": "invalid_hvac_mode", "hvac_mode": hvac_mode}
+                )
+            return self._post_service(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": entity_id, "hvac_mode": hvac_mode},
+            )
+
+        if tool == "climate.set_temperature":
+            entity_id = str(call.args.get("entity_id"))
+            try:
+                temperature = int(call.args.get("temperature"))
+            except Exception:
+                return ToolResult(
+                    ok=False,
+                    tool=tool,
+                    details={"error": "invalid_temperature", "temperature": call.args.get("temperature")},
+                )
+            return self._post_service(
+                "climate",
+                "set_temperature",
+                {"entity_id": entity_id, "temperature": temperature},
+            )
+
+        if tool == "climate.set_fan_mode":
+            entity_id = str(call.args.get("entity_id"))
+            fan_mode = str(call.args.get("fan_mode", "auto")).lower()
+            if fan_mode not in ("auto", "low", "medium", "high"):
+                return ToolResult(
+                    ok=False, tool=tool, details={"error": "invalid_fan_mode", "fan_mode": fan_mode}
+                )
+            return self._post_service(
+                "climate",
+                "set_fan_mode",
+                {"entity_id": entity_id, "fan_mode": fan_mode},
+            )
 
         # temp placeholder for "speech" until you wire HomePod TTS
         if tool == "tts.say":

@@ -23,3 +23,5 @@ devices:
     friendly_name: bedroom_mmwave_sensor
   '0xa4c1381aa87a65da':
     friendly_name: bedroom_light_switch
+  '0xa4c1380e72596998':
+    friendly_name: temp_humidity_sensor
