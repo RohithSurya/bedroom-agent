@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from math import ceil
 from dataclasses import dataclass, field
 from typing import Dict, Tuple
 
@@ -28,7 +29,7 @@ class CooldownStore:
         last_ts, last_cd = last
         cd = max(cooldown_seconds, last_cd)  # if policy increases cooldown, honor the larger
         elapsed = now - last_ts
-        remaining = int(cd - elapsed)
+        remaining = max(0, ceil(cd - elapsed))
 
         if remaining > 0:
             return False, remaining

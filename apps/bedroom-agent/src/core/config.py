@@ -39,6 +39,19 @@ class Settings(BaseSettings):
     ENTRY_LIGHT_ENTITY_ID: str = "switch.bedroom_light_switch"
     VACANCY_OFF_DELAY_S: int = 120  # turn lights off after this much no-presence time
 
+    # Vision / snapshot analysis
+    CAMERA_MODE: str = "device"  # "ha_snapshot", "file", or "device"
+    CAMERA_ENTITY_ID: str = ""
+    CAMERA_DEVICE: str = "/dev/video0"
+    CAMERA_WIDTH: int = 640
+    CAMERA_HEIGHT: int = 480
+    CAMERA_SKIP_FRAMES: int = 30
+    VISION_FALLBACK_IMAGE_PATH: str = ""
+    VISION_DEBUG_SAVE_DIR: str = "/home/rosurya/bedroom-agent/apps/bedroom-agent/data/debug"
+    VISION_ANALYSIS_ENABLED: bool = True
+    VISION_PROMPT_PROFILE: str = "general"  # "general", "focus", "sleep"
+    VISION_MAX_OUTPUT_TOKENS: int = 160
+
     # Quiet hours (optional but nice)
     QUIET_HOURS_START: str = "00:00"  # HH:MM
     QUIET_HOURS_END: str = "00:00"  # HH:MM

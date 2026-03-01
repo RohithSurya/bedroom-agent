@@ -60,13 +60,36 @@ class NLRouter:
             return "fan_on", {}
         if "fan" in t and ("off" in t or "stop" in t):
             return "fan_off", {}
-        if "analyze" in t or "check bedroom" in t or "analyze bedroom" in t:
+        if any(
+            phrase in t
+            for phrase in (
+                "analyze",
+                "check bedroom",
+                "analyze bedroom",
+                "analyze my room",
+                "is this room good for focus",
+                "what should i fix before sleep",
+                "room good for focus",
+                "before sleep",
+            )
+        ):
             return "analyze_bedroom", {}
         if "start" in t and ("focus" in t or "deep work" in t):
             return "focus_start", {}
         if "end" in t and ("focus" in t or "deep work" in t):
             return "focus_end", {}
-        if any(k in t for k in ["status", "how am i", "summary", "how long"]):
+        if any(
+            k in t
+            for k in [
+                "status",
+                "how am i",
+                "summary",
+                "how long",
+                "why did",
+                "what happened",
+                "recent events",
+            ]
+        ):
             return "status", {"query": text}
 
         # LLM routing (optional). If unavailable, fall back to status.

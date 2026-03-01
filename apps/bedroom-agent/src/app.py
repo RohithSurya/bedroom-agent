@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from agent.mqtt_listener import Z2MMqttListener
+from agent.status_service import StatusService
 from memory.sqlite_kv import SqliteKV
 from agent.orchestrator import Orchestrator
 from agent.nl_router import NLRouter
@@ -20,6 +21,8 @@ from llm.ollama_client import OllamaClient
 from tools.ha_http_client import HAToolClientHTTP
 from tools.tool_executor import ToolExecutor
 from tools.ha_real_client import HAToolClientReal
+from vision.image_source import BedroomImageSource
+from vision.room_analyzer import BedroomRoomAnalyzer
 
 
 class AgentRunRequest(BaseModel):
@@ -57,6 +60,26 @@ class AgentAppState:
         )
         self.router = NLRouter(llm=self.llm)
         self.kv = SqliteKV(settings.SQLITE_PATH)
+        self.status_service = StatusService(kv=self.kv, llm=self.llm, tz_name=settings.TIMEZONE)
+        self.room_analyzer = BedroomRoomAnalyzer(
+            kv=self.kv,
+            llm=self.llm,
+            image_source=BedroomImageSource(
+                base_url=settings.HA_BASE_URL,
+                token=settings.HA_TOKEN,
+                camera_mode=settings.CAMERA_MODE,
+                camera_entity_id=settings.CAMERA_ENTITY_ID,
+                camera_device=settings.CAMERA_DEVICE,
+                camera_width=int(settings.CAMERA_WIDTH),
+                camera_height=int(settings.CAMERA_HEIGHT),
+                camera_skip_frames=int(settings.CAMERA_SKIP_FRAMES),
+                fallback_image_path=settings.VISION_FALLBACK_IMAGE_PATH,
+                debug_save_dir=settings.VISION_DEBUG_SAVE_DIR,
+            ),
+            enabled=bool(settings.VISION_ANALYSIS_ENABLED),
+            prompt_profile=settings.VISION_PROMPT_PROFILE,
+            max_output_tokens=int(settings.VISION_MAX_OUTPUT_TOKENS),
+        )
 
         self.orchestrator = Orchestrator(cooldowns=cooldowns)
         self.runner = Runner(
@@ -257,11 +280,33 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
     """
     try:
         intent, args = app.state.agent.router.route(text=req.text, state=req.state)
-        plan = app.state.agent.orchestrator.handle_request(
-            intent=intent,
-            args=args,
-            state=req.state,
-        )
+        if intent == "status":
+            result = app.state.agent.status_service.handle_query(args.get("query", req.text))
+            return {
+                "mode": "info",
+                "input": {"text": req.text, "intent": intent, "args": args},
+                "result": result,
+            }
+
+        if intent == "analyze_bedroom":
+            result = app.state.agent.room_analyzer.analyze(req.text)
+            return {
+                "mode": "info",
+                "input": {"text": req.text, "intent": intent, "args": args},
+                "result": result,
+            }
+
+        if intent in {"focus_start", "focus_end"}:
+            return {
+                "mode": "info",
+                "input": {"text": req.text, "intent": intent, "args": args},
+                "result": {
+                    "summary": "Focus mode is not implemented in this demo build yet.",
+                    "structured": {"supported": False, "intent": intent},
+                },
+            }
+
+        plan = app.state.agent.orchestrator.handle_request(intent=intent, args=args, state=req.state)
         execution = app.state.agent.runner.execute_actions(
             correlation_id=plan["correlation_id"],
             actions=plan["actions"],
@@ -272,6 +317,7 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return {
+        "mode": "action",
         "input": {"text": req.text, "intent": intent, "args": args},
         "correlation_id": plan["correlation_id"],
         "decision": plan["decision"].model_dump(),

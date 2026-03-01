@@ -9,7 +9,7 @@ from tools.tool_executor import ToolExecutor
 def test_runner_emits_fallback_tts_on_light_failure(tmp_path):
     logger = JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York")
     ex = ToolExecutor(mode="active")
-    ex.inject_failure(tool="light.set", times=2, error="simulated_timeout")  # hard fail
+    ex.inject_failure(tool="switch.set", times=2, error="simulated_timeout")  # hard fail
 
     orch = Orchestrator()
     out = orch.handle_request(

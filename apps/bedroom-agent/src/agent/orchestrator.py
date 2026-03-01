@@ -10,8 +10,8 @@ from core.cooldowns import CooldownStore
 
 
 class Orchestrator:
-    def __init__(self, cooldowns: CooldownStore) -> None:
-        self.cooldowns = cooldowns
+    def __init__(self, cooldowns: CooldownStore | None = None) -> None:
+        self.cooldowns = cooldowns or CooldownStore()
 
     def handle_request(
         self, *, intent: str, args: dict[str, Any], state: dict[str, Any]
@@ -37,8 +37,6 @@ class Orchestrator:
 
             if decision.decision == "allow":
                 entity_id = args.get("entity_id", "switch.bedroom_light_switch")
-                brightness_pct = int(args.get("brightness_pct", 15))
-                transition_s = float(args.get("transition_s", 2))
 
                 actions.append(
                     ToolCall(

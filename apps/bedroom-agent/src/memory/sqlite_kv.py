@@ -114,3 +114,39 @@ class SqliteKV:
                 "INSERT INTO events(ts, type, payload_json) VALUES(?,?,?)",
                 (now, event_type, p),
             )
+
+    def get_namespace(self, namespace: str) -> dict[str, Any]:
+        with self._lock, self._conn() as c:
+            rows = c.execute(
+                "SELECT key, value_json FROM kv WHERE namespace=? ORDER BY updated_at DESC",
+                (namespace,),
+            ).fetchall()
+
+        out: dict[str, Any] = {}
+        for key, value_json in rows:
+            try:
+                out[key] = json.loads(value_json)
+            except Exception:
+                out[key] = value_json
+        return out
+
+    def recent_events(self, limit: int = 20, event_type: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT ts, type, payload_json FROM events"
+        params: tuple[Any, ...] = ()
+        if event_type is not None:
+            sql += " WHERE type=?"
+            params = (event_type,)
+        sql += " ORDER BY ts DESC LIMIT ?"
+        params += (int(limit),)
+
+        with self._lock, self._conn() as c:
+            rows = c.execute(sql, params).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for ts, row_type, payload_json in rows:
+            try:
+                payload = json.loads(payload_json)
+            except Exception:
+                payload = {"raw": payload_json}
+            out.append({"ts": float(ts), "type": row_type, "payload": payload})
+        return out

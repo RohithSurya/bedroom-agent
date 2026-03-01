@@ -19,7 +19,12 @@ class ToolExecutor:
     """
 
     mode: str  # "shadow" or "active"
-    logger: JsonlLogger
+    logger: JsonlLogger = field(
+        default_factory=lambda: JsonlLogger(
+            log_dir="/tmp/bedroom-agent-tool-executor",
+            tz_name="America/New_York",
+        )
+    )
     idempotency: IdempotencyStore = field(default_factory=IdempotencyStore)
 
     device_state: Dict[str, Any] = field(

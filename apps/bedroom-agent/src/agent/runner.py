@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from contracts.ha import ToolCall, ToolResult
@@ -13,8 +13,13 @@ from tools.tool_executor import ToolExecutor
 @dataclass
 class Runner:
     executor: ToolExecutor
-    cooldowns: CooldownStore
-    logger: JsonlLogger
+    cooldowns: CooldownStore = field(default_factory=CooldownStore)
+    logger: JsonlLogger = field(
+        default_factory=lambda: JsonlLogger(
+            log_dir="/tmp/bedroom-agent-runner",
+            tz_name="America/New_York",
+        )
+    )
     retry_attempts: int = 1  # v0 default
 
     def _read_entity_state(self, entity_id: str) -> dict[str, Any]:
@@ -121,13 +126,21 @@ class Runner:
 
         return {"verified": bool(result.ok), "note": "no verifier for tool"}
 
+    def _is_lighting_call(self, call: ToolCall) -> bool:
+        if call.tool == "light.set":
+            return True
+        if call.tool != "switch.set":
+            return False
+        entity_id = str(call.args.get("entity_id", "")).lower()
+        return "light" in entity_id or "lamp" in entity_id
+
     def execute_actions(
         self,
         *,
         correlation_id: str,
         actions: list[ToolCall],
-        cooldown_key: str | None,
-        cooldown_seconds: int,
+        cooldown_key: str | None = None,
+        cooldown_seconds: int = 0,
     ) -> dict[str, Any]:
         failures: list[dict[str, Any]] = []
         executed_tools: list[str] = []
@@ -156,8 +169,7 @@ class Runner:
                 payload={"tool": call.tool, "verify": verify},
             )
 
-            # Retry-on-failure (only for light.set in v0)
-            if call.tool == "light.set":
+            if self._is_lighting_call(call):
                 attempts_left = self.retry_attempts
                 while attempts_left > 0 and (not verify.get("verified", False)):
                     attempts_left -= 1
@@ -180,7 +192,7 @@ class Runner:
                     light_ok = False
                     failures.append(
                         {
-                            "tool": "light.set",
+                            "tool": call.tool,
                             "reason": "light_verify_failed",
                             "details": {"verify": verify, "result": result.details},
                         }
