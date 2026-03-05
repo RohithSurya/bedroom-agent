@@ -66,21 +66,17 @@ class AgentAppState:
 
         # Optional LLM backend (local on-device). If it isn't running, routing falls back safely.
         self.llm = build_llm_client(
-            provider=settings.LLM_PROVIDER,
             model=settings.LLM_MODEL,
             timeout_s=float(settings.LLM_TIMEOUT_S),
             base_url=settings.LLM_BASE_URL,
-            mistral_api_key=settings.MISTRAL_API_KEY,
-            mistral_api_base_url=settings.MISTRAL_API_BASE_URL,
+            openai_api_key=settings.OPENAI_API_KEY,
         )
         self.decision_llm = (
             build_llm_client(
-                provider=settings.LLM_PROVIDER,
                 model=settings.LLM_MODEL,
                 timeout_s=float(settings.LLM_DECISION_TIMEOUT_S),
                 base_url=settings.LLM_BASE_URL,
-                mistral_api_key=settings.MISTRAL_API_KEY,
-                mistral_api_base_url=settings.MISTRAL_API_BASE_URL,
+                openai_api_key=settings.OPENAI_API_KEY,
             )
             if bool(settings.LLM_DECISION_ENABLED)
             else None
@@ -183,7 +179,9 @@ class AgentAppState:
         fan_raw = self.runner.read_entity_state(fan_entity_id) if fan_entity_id else {}
         ac_raw = self.runner.read_entity_state(ac_entity_id) if ac_entity_id else {}
         temp_raw = self.runner.read_entity_state(temp_entity_id) if temp_entity_id else {}
-        humidity_raw = self.runner.read_entity_state(humidity_entity_id) if humidity_entity_id else {}
+        humidity_raw = (
+            self.runner.read_entity_state(humidity_entity_id) if humidity_entity_id else {}
+        )
 
         temperature_c = self._coerce_float_state(temp_raw)
         humidity_pct = self._coerce_float_state(humidity_raw)
@@ -219,12 +217,17 @@ class AgentAppState:
             "vision": self._build_vision_state(),
         }
         state["room_uncomfortable"] = bool(
-            (temperature_c is not None and temperature_c >= float(self.settings.COMFORT_TRIGGER_TEMP_C))
+            (
+                temperature_c is not None
+                and temperature_c >= float(self.settings.COMFORT_TRIGGER_TEMP_C)
+            )
             or (
                 humidity_pct is not None
                 and humidity_pct >= float(self.settings.COMFORT_TRIGGER_HUMIDITY_PCT)
             )
         )
+
+        # print("Built runtime state:", state)
 
         for key, value in (extra_state or {}).items():
             state.setdefault(key, value)
@@ -404,8 +407,12 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
     Later you'll extend intents like analyze_bedroom/focus_start/etc.
     """
     try:
+        print(f"Received chat request with text: '{req.text}' and state: {req.state}")
         state = app.state.agent.build_runtime_state(req.state)
         intent, args = app.state.agent.router.route(text=req.text, state=state)
+        # print(
+        #     f"Routed user text '{req.text}' to intent '{intent}' with args {args} and state {state}"
+        # )
         if intent == "status":
             result = app.state.agent.status_service.handle_query(args.get("query", req.text))
             return {
@@ -482,7 +489,9 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                     "execution": {"success": True, "failures": [], "executed_tools": []},
                 }
 
-            plan = agent.orchestrator.handle_request(intent=choice.intent, args=choice.args, state=state)
+            plan = agent.orchestrator.handle_request(
+                intent=choice.intent, args=choice.args, state=state
+            )
             policy = plan["decision"].model_dump()
             if plan["decision"].decision == "deny":
                 agent.kv.append_event(

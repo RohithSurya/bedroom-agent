@@ -92,10 +92,9 @@ Important variables:
 - `TOOL_BACKEND=local|http|ha`
 - `HA_BASE_URL`
 - `HA_TOKEN`
-- `LLM_PROVIDER=ollama|mistral`
 - `LLM_BASE_URL`
 - `LLM_MODEL`
-- `MISTRAL_API_KEY`
+- `OPENAI_API_KEY` (optional for local OpenAI-compatible servers)
 - `MQTT_HOST`
 - `MQTT_PORT`
 - `CAMERA_MODE=device|ha_snapshot|file`
@@ -115,14 +114,9 @@ SQLite namespaces currently used include:
 - `vision`
 - `status`
 
-## Model Providers
+## LLM Backend
 
-The current code supports:
-
-- `ollama`: local `/api/generate` backend, including structured output and image payloads
-- `mistral`: hosted Mistral Chat Completions API
-
-Routing, status responses, decision selection, and room analysis all use the provider built by `src/llm/factory.py`.
+The code uses a single OpenAI-compatible backend (`/v1/chat/completions`), which matches `llama.cpp` server mode.
 
 ## Notes on Safety
 

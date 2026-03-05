@@ -34,7 +34,7 @@ The project is split into three pieces:
 
 **Sensors + control**
 
-- **Camera** -> to feed photos to mistral model
+- **Camera** -> to feed photos to the local Ministral model backend
 - **mmWave presence sensor** (Zigbee) → presence/occupancy belief state
 - **Zigbee smart plug** → bedside lamp + power telemetry use-cases
 - **Home Assistant Connect ZBT-2** (Zigbee coordinator, run in **Zigbee mode** for v1.0)
@@ -428,9 +428,8 @@ The agent reads settings from `apps/bedroom-agent/.env`. The most important vari
 - `AGENT_MODE`: `shadow` or `active`
 - `TOOL_BACKEND`: `local`, `http`, or `ha`
 - `HA_BASE_URL` and `HA_TOKEN`: Home Assistant API access
-- `LLM_PROVIDER`: `ollama` or `mistral`
 - `LLM_BASE_URL` and `LLM_MODEL`: local model backend settings
-- `MISTRAL_API_KEY`: required when `LLM_PROVIDER=mistral`
+- `OPENAI_API_KEY`: optional for local OpenAI-compatible servers
 - `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, `Z2M_PRESENCE_TOPIC`: Zigbee2MQTT integration
 - `CAMERA_MODE`, `CAMERA_DEVICE`, `VISION_FALLBACK_IMAGE_PATH`: image capture configuration
 

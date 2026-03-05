@@ -21,6 +21,83 @@ STATUS_SCHEMA: dict[str, Any] = {
     },
 }
 
+QUERY_WHY_LIGHT_ON = "why_light_on"
+QUERY_WHY_LIGHT_OFF = "why_light_off"
+QUERY_RECENT_EVENTS = "recent_events"
+QUERY_ROOM_STATUS = "room_status"
+
+QUERY_EVENT_PRIORITIES: dict[str, list[str]] = {
+    QUERY_WHY_LIGHT_ON: [
+        "enter_room_skipped_quiet_hours_switch",
+        "enter_room_skipped_already_on",
+        "enter_detected",
+        "door_update",
+        "presence_update",
+    ],
+    QUERY_WHY_LIGHT_OFF: [
+        "vacancy_off_executed",
+        "vacancy_detected",
+        "vacancy_timer_started",
+        "vacancy_timer_cancelled",
+        "presence_update",
+    ],
+    QUERY_ROOM_STATUS: [
+        "enter_detected",
+        "vacancy_detected",
+        "vacancy_off_executed",
+        "door_update",
+        "presence_update",
+        "bedroom_analysis_completed",
+    ],
+}
+
+WHY_LIGHT_ON_RULES: list[tuple[str, dict[str, Any]]] = [
+    (
+        "enter_room_skipped_quiet_hours_switch",
+        {
+            "answer": (
+                "The agent detected entry, but skipped turning the switch on "
+                "because it was quiet hours."
+            ),
+            "reasoning_tags": ["enter_detected", "quiet_hours", "switch_skip"],
+            "confidence": 0.99,
+        },
+    ),
+    (
+        "enter_room_skipped_already_on",
+        {
+            "answer": (
+                "The room entry trigger fired, but the light was already on so "
+                "no new turn-on was needed."
+            ),
+            "reasoning_tags": ["enter_detected", "already_on"],
+            "confidence": 0.99,
+        },
+    ),
+    (
+        "enter_detected",
+        {
+            "answer": (
+                "The bedroom light turned on because the door opened and "
+                "presence was detected within the entry window."
+            ),
+            "reasoning_tags": ["door_open", "presence_detected", "entry_window"],
+            "confidence": 0.96,
+        },
+    ),
+    (
+        "door_update",
+        {
+            "answer": (
+                "I saw a recent door-open event, but not enough entry evidence "
+                "in the retained logs to confirm the exact light-on trigger."
+            ),
+            "reasoning_tags": ["door_open", "insufficient_entry_evidence"],
+            "confidence": 0.7,
+        },
+    ),
+]
+
 
 @dataclass
 class StatusService:
@@ -43,10 +120,10 @@ class StatusService:
         }
 
         fallback = self._fallback_answer(query_type, beliefs, prefs, relevant_events)
-        structured = fallback if query_type in {"why_light_on", "why_light_off"} else self._llm_answer(
-            query=query, context=context, fallback=fallback
-        )
-
+        structured = fallback
+        if query_type not in {QUERY_WHY_LIGHT_ON, QUERY_WHY_LIGHT_OFF}:
+            structured = self._llm_answer(query=query, context=context, fallback=fallback)
+        print(f"Structured LLM answer: {structured}")
         result = {
             "summary": structured["answer"],
             "structured": {
@@ -61,7 +138,9 @@ class StatusService:
         self.kv.append_event("status_query_answered", {"query": query, "query_type": query_type})
         return result
 
-    def _llm_answer(self, *, query: str, context: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    def _llm_answer(
+        self, *, query: str, context: dict[str, Any], fallback: dict[str, Any]
+    ) -> dict[str, Any]:
         if self.llm is None:
             return fallback
 
@@ -97,12 +176,12 @@ class StatusService:
     def _classify(self, query: str) -> str:
         q = query.lower()
         if "why" in q and ("turn on" in q or "turned on" in q or "light on" in q):
-            return "why_light_on"
+            return QUERY_WHY_LIGHT_ON
         if "why" in q and ("turn off" in q or "turned off" in q or "light off" in q):
-            return "why_light_off"
+            return QUERY_WHY_LIGHT_OFF
         if any(term in q for term in ("recent", "happened", "summary", "what happened")):
-            return "recent_events"
-        return "room_status"
+            return QUERY_RECENT_EVENTS
+        return QUERY_ROOM_STATUS
 
     def _fallback_answer(
         self,
@@ -111,39 +190,19 @@ class StatusService:
         prefs: dict[str, Any],
         recent_events: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        if query_type == "why_light_on":
+        if query_type == QUERY_WHY_LIGHT_ON:
             return self._fallback_why_on(recent_events)
-        if query_type == "why_light_off":
+        if query_type == QUERY_WHY_LIGHT_OFF:
             return self._fallback_why_off(recent_events)
-        if query_type == "recent_events":
+        if query_type == QUERY_RECENT_EVENTS:
             return self._fallback_recent(recent_events)
         return self._fallback_status(beliefs, prefs, recent_events)
 
     def _fallback_why_on(self, recent_events: list[dict[str, Any]]) -> dict[str, Any]:
-        if self._find_event(recent_events, "enter_room_skipped_quiet_hours_switch"):
-            return {
-                "answer": "The agent detected entry, but skipped turning the switch on because it was quiet hours.",
-                "reasoning_tags": ["enter_detected", "quiet_hours", "switch_skip"],
-                "confidence": 0.99,
-            }
-        if self._find_event(recent_events, "enter_room_skipped_already_on"):
-            return {
-                "answer": "The room entry trigger fired, but the light was already on so no new turn-on was needed.",
-                "reasoning_tags": ["enter_detected", "already_on"],
-                "confidence": 0.99,
-            }
-        if self._find_event(recent_events, "enter_detected"):
-            return {
-                "answer": "The bedroom light turned on because the door opened and presence was detected within the entry window.",
-                "reasoning_tags": ["door_open", "presence_detected", "entry_window"],
-                "confidence": 0.96,
-            }
-        if self._find_event(recent_events, "door_update"):
-            return {
-                "answer": "I saw a recent door-open event, but not enough entry evidence in the retained logs to confirm the exact light-on trigger.",
-                "reasoning_tags": ["door_open", "insufficient_entry_evidence"],
-                "confidence": 0.7,
-            }
+        event_types = {event["type"] for event in recent_events}
+        for event_type, response in WHY_LIGHT_ON_RULES:
+            if event_type in event_types:
+                return response
         return {
             "answer": "I do not see a recent successful entry trigger for the light turn-on in memory.",
             "reasoning_tags": ["no_recent_enter_detected"],
@@ -151,7 +210,9 @@ class StatusService:
         }
 
     def _fallback_why_off(self, recent_events: list[dict[str, Any]]) -> dict[str, Any]:
-        vacancy = self._find_event(recent_events, "vacancy_detected")
+        vacancy = next(
+            (event for event in recent_events if event["type"] == "vacancy_detected"), None
+        )
         if vacancy is not None:
             delay_s = vacancy["payload"].get("delay_s")
             delay_part = f" for {delay_s} seconds" if delay_s is not None else ""
@@ -160,7 +221,7 @@ class StatusService:
                 "reasoning_tags": ["presence_false", "vacancy_timeout", "light_off"],
                 "confidence": 0.97,
             }
-        if self._find_event(recent_events, "vacancy_off_skipped_already_off"):
+        if any(event["type"] == "vacancy_off_skipped_already_off" for event in recent_events):
             return {
                 "answer": "The room became vacant, but the light was already off so no turn-off action was needed.",
                 "reasoning_tags": ["presence_false", "already_off"],
@@ -249,55 +310,18 @@ class StatusService:
             return f"entry automation skipped because {reason}"
         return event_type.replace("_", " ")
 
-    def _find_event(self, recent_events: list[dict[str, Any]], event_type: str) -> dict[str, Any] | None:
-        for event in recent_events:
-            if event["type"] == event_type:
-                return event
-        return None
-
     def _select_events_for_query(
         self, query_type: str, recent_events: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        if query_type == "why_light_on":
-            selected = self._prioritize_events(
-                recent_events,
-                preferred_types=[
-                    "enter_room_skipped_quiet_hours_switch",
-                    "enter_room_skipped_already_on",
-                    "enter_detected",
-                    "door_update",
-                    "presence_update",
-                ],
-                limit=6,
-            )
-            return selected
-
-        if query_type == "why_light_off":
-            return self._prioritize_events(
-                recent_events,
-                preferred_types=[
-                    "vacancy_off_executed",
-                    "vacancy_detected",
-                    "vacancy_timer_started",
-                    "vacancy_timer_cancelled",
-                    "presence_update",
-                ],
-                limit=6,
-            )
-
-        if query_type == "recent_events":
+        if query_type == QUERY_RECENT_EVENTS:
             return self._compress_presence_events(recent_events, limit=6)
 
+        preferred = QUERY_EVENT_PRIORITIES.get(
+            query_type, QUERY_EVENT_PRIORITIES[QUERY_ROOM_STATUS]
+        )
         return self._prioritize_events(
             recent_events,
-            preferred_types=[
-                "enter_detected",
-                "vacancy_detected",
-                "vacancy_off_executed",
-                "door_update",
-                "presence_update",
-                "bedroom_analysis_completed",
-            ],
+            preferred_types=preferred,
             limit=6,
         )
 
@@ -321,7 +345,7 @@ class StatusService:
                 if len(selected) >= limit:
                     return selected
 
-        return selected[:limit]
+        return selected
 
     def _compress_presence_events(
         self, recent_events: list[dict[str, Any]], *, limit: int
@@ -340,7 +364,9 @@ class StatusService:
             if len(selected) >= limit:
                 break
 
-        return selected[:limit]
+        return selected
 
     def _format_ts(self, ts: float) -> str:
-        return datetime.fromtimestamp(float(ts), ZoneInfo(self.tz_name)).strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.fromtimestamp(float(ts), ZoneInfo(self.tz_name)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )

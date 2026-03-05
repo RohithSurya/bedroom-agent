@@ -14,13 +14,11 @@ class Settings(BaseSettings):
     HA_BASE_URL: str = "http://host.docker.internal:8123"
     HA_TOKEN: str = ""
 
-    # Local or hosted LLM/VLM backend (hackathon): e.g., Ollama or Mistral API.
-    LLM_PROVIDER: str = "ollama"  # "ollama" or "mistral"
-    LLM_BASE_URL: str = "http://host.docker.internal:11434"
-    LLM_MODEL: str = "ministral-3:3b"
+    # Local or hosted OpenAI-compatible backend (llama.cpp server).
+    LLM_BASE_URL: str = "http://127.0.0.1:8081/v1"
+    LLM_MODEL: str = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf"
     LLM_TIMEOUT_S: float = 60.0
-    MISTRAL_API_BASE_URL: str = "https://api.mistral.ai/v1"
-    MISTRAL_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
     LLM_DECISION_ENABLED: bool = True
     LLM_DECISION_MIN_CONFIDENCE: float = 0.55
     LLM_DECISION_TIMEOUT_S: float = 20.0
