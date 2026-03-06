@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import time
+import requests
 from typing import Any, Literal
+from requests.adapters import HTTPAdapter
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -25,6 +27,7 @@ from tools.tool_executor import ToolExecutor
 from tools.ha_real_client import HAToolClientReal
 from vision.image_source import BedroomImageSource
 from vision.room_analyzer import BedroomRoomAnalyzer
+from reliability.deadline import Deadline
 
 
 class AgentRunRequest(BaseModel):
@@ -63,21 +66,23 @@ class AgentAppState:
         self.settings = settings
         self.cooldowns = cooldowns
         self.logger = JsonlLogger(log_dir=settings.LOG_DIR, tz_name=settings.TIMEZONE)
+        self.http = requests.Session()
+        adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
+        self.http.mount("http://", adapter)
+        self.http.mount("https://", adapter)
 
-        # Optional LLM backend (local on-device). If it isn't running, routing falls back safely.
-        self.llm = build_llm_client(
-            model=settings.LLM_MODEL,
-            timeout_s=float(settings.LLM_TIMEOUT_S),
-            base_url=settings.LLM_BASE_URL,
-            openai_api_key=settings.OPENAI_API_KEY,
-        )
-        self.decision_llm = (
-            build_llm_client(
+        def _make_llm_client(timeout_s: float):
+            return build_llm_client(
                 model=settings.LLM_MODEL,
-                timeout_s=float(settings.LLM_DECISION_TIMEOUT_S),
+                timeout_s=timeout_s,
                 base_url=settings.LLM_BASE_URL,
                 openai_api_key=settings.OPENAI_API_KEY,
             )
+
+        # Optional LLM backend (local on-device). If it isn't running, routing falls back safely.
+        self.llm = _make_llm_client(timeout_s=float(settings.LLM_TIMEOUT_S))
+        self.decision_llm = (
+            _make_llm_client(timeout_s=float(settings.LLM_DECISION_TIMEOUT_S))
             if bool(settings.LLM_DECISION_ENABLED)
             else None
         )
@@ -136,6 +141,39 @@ class AgentAppState:
             on_vacant=self._on_room_vacant,
         )
 
+    def _required_entity_ids_for_intent(self, intent: str | None) -> set[str]:
+        # If intent is None, default to “full” state (keeps old behavior for any callers)
+        if not intent:
+            return {
+                self.settings.ENTRY_LIGHT_ENTITY_ID,
+                self.settings.BEDROOM_FAN_ENTITY_ID,
+                self.settings.BEDROOM_AC_ENTITY_ID,
+                self.settings.TEMP_SENSOR_ENTITY_ID,
+                self.settings.HUMIDITY_SENSOR_ENTITY_ID,
+            } - {None, ""}
+
+        intent = intent.strip().lower()
+
+        # Minimal HA reads by intent
+        env_intents = {"comfort_adjust", "focus_start", "sleep_mode", "decision_request"}
+        light_check_intents = {"focus_start", "sleep_mode"}
+
+        ids: set[str] = set()
+
+        if intent in light_check_intents and self.settings.ENTRY_LIGHT_ENTITY_ID:
+            ids.add(self.settings.ENTRY_LIGHT_ENTITY_ID)
+
+        if intent in env_intents:
+            if self.settings.BEDROOM_AC_ENTITY_ID:
+                ids.add(self.settings.BEDROOM_AC_ENTITY_ID)
+            if self.settings.TEMP_SENSOR_ENTITY_ID:
+                ids.add(self.settings.TEMP_SENSOR_ENTITY_ID)
+            if self.settings.HUMIDITY_SENSOR_ENTITY_ID:
+                ids.add(self.settings.HUMIDITY_SENSOR_ENTITY_ID)
+
+        # Fan/light generally don’t need pre-reads for fan_on/off/night_mode/enter_room
+        return ids
+
     @staticmethod
     def _coerce_float_state(raw: dict[str, Any]) -> float | None:
         try:
@@ -165,7 +203,12 @@ class AgentAppState:
             "age_s": round(age_s, 1) if age_s is not None else None,
         }
 
-    def build_runtime_state(self, extra_state: dict[str, Any] | None = None) -> dict[str, Any]:
+    def build_runtime_state(
+        self,
+        extra_state: dict[str, Any] | None = None,
+        *,
+        intent: str | None = None,
+    ) -> dict[str, Any]:
         beliefs = self.kv.get_namespace("belief")
         prefs = self.kv.get_namespace("prefs")
 
@@ -175,13 +218,21 @@ class AgentAppState:
         temp_entity_id = self.settings.TEMP_SENSOR_ENTITY_ID
         humidity_entity_id = self.settings.HUMIDITY_SENSOR_ENTITY_ID
 
-        light_raw = self.runner.read_entity_state(light_entity_id) if light_entity_id else {}
-        fan_raw = self.runner.read_entity_state(fan_entity_id) if fan_entity_id else {}
-        ac_raw = self.runner.read_entity_state(ac_entity_id) if ac_entity_id else {}
-        temp_raw = self.runner.read_entity_state(temp_entity_id) if temp_entity_id else {}
-        humidity_raw = (
-            self.runner.read_entity_state(humidity_entity_id) if humidity_entity_id else {}
-        )
+        required_ids = self._required_entity_ids_for_intent(intent)
+        ha_reads = 0
+
+        def read_if_needed(eid: str | None) -> dict[str, Any]:
+            nonlocal ha_reads
+            if not eid or eid not in required_ids:
+                return {}
+            ha_reads += 1
+            return self.runner.read_entity_state(eid)
+
+        light_raw = read_if_needed(light_entity_id)
+        fan_raw = read_if_needed(fan_entity_id)
+        ac_raw = read_if_needed(ac_entity_id)
+        temp_raw = read_if_needed(temp_entity_id)
+        humidity_raw = read_if_needed(humidity_entity_id)
 
         temperature_c = self._coerce_float_state(temp_raw)
         humidity_pct = self._coerce_float_state(humidity_raw)
@@ -231,6 +282,8 @@ class AgentAppState:
 
         for key, value in (extra_state or {}).items():
             state.setdefault(key, value)
+
+        state["_metrics"] = {"ha_reads": ha_reads, "required_ids": sorted(required_ids)}
         return state
 
     def _on_enter_room(self, meta: dict[str, Any]) -> None:
@@ -373,18 +426,24 @@ def health() -> dict[str, Any]:
 @app.post("/agent/run")
 def run_agent(req: AgentRunRequest) -> dict[str, Any]:
     try:
-        state = app.state.agent.build_runtime_state(req.state)
+        deadline = Deadline.from_now(app.state.agent.settings.REQUEST_BUDGET_S)
+        t0 = time.perf_counter()
+        state = app.state.agent.build_runtime_state(req.state, intent=req.intent)
+        t_state = time.perf_counter()
         plan = app.state.agent.orchestrator.handle_request(
             intent=req.intent,
             args=req.args,
             state=state,
         )
+        t_plan = time.perf_counter()
         execution = app.state.agent.runner.execute_actions(
             correlation_id=plan["correlation_id"],
             actions=plan["actions"],
             cooldown_key=plan.get("cooldown_key"),
             cooldown_seconds=int(plan.get("cooldown_seconds", 0)),
+            deadline=deadline,
         )
+        t_exec = time.perf_counter()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -393,6 +452,12 @@ def run_agent(req: AgentRunRequest) -> dict[str, Any]:
         "decision": plan["decision"].model_dump(),
         "actions": [a.model_dump() for a in plan["actions"]],
         "execution": execution,
+        "timings_ms": {
+            "state": round((t_state - t0) * 1000, 1),
+            "plan": round((t_plan - t_state) * 1000, 1),
+            "exec": round((t_exec - t_plan) * 1000, 1),
+        },
+        "state_metrics": state.get("_metrics", {}),
     }
 
 
@@ -407,27 +472,40 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
     Later you'll extend intents like analyze_bedroom/focus_start/etc.
     """
     try:
+        deadline = Deadline.from_now(app.state.agent.settings.REQUEST_BUDGET_S)
         print(f"Received chat request with text: '{req.text}' and state: {req.state}")
-        state = app.state.agent.build_runtime_state(req.state)
-        intent, args = app.state.agent.router.route(text=req.text, state=state)
-        # print(
-        #     f"Routed user text '{req.text}' to intent '{intent}' with args {args} and state {state}"
-        # )
+        t0 = time.perf_counter()
+        intent, args = app.state.agent.router.route(text=req.text, state={})
+        t_nl_router = time.perf_counter()
+
         if intent == "status":
             result = app.state.agent.status_service.handle_query(args.get("query", req.text))
+            t_status = time.perf_counter()
             return {
                 "mode": "info",
                 "input": {"text": req.text, "intent": intent, "args": args},
                 "result": result,
+                "timings_ms": {
+                    "nl_router": round((t_nl_router - t0) * 1000, 1),
+                    "status_service": round((t_status - t_nl_router) * 1000, 1),
+                },
             }
 
         if intent == "analyze_bedroom":
             result = app.state.agent.room_analyzer.analyze(req.text)
+            t_analyze_bedroom = time.perf_counter()
             return {
                 "mode": "info",
                 "input": {"text": req.text, "intent": intent, "args": args},
                 "result": result,
+                "timings_ms": {
+                    "nl_router": round((t_nl_router - t0) * 1000, 1),
+                    "analyze_bedroom": round((t_analyze_bedroom - t_nl_router) * 1000, 1),
+                },
             }
+        t_before_state = time.perf_counter()
+        state = app.state.agent.build_runtime_state(req.state)
+        t_state = time.perf_counter()
 
         if intent == "decision_request":
             agent = app.state.agent
@@ -447,6 +525,7 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                 user_text=req.text,
                 state=state,
             )
+            t_decision = time.perf_counter()
             agent.kv.append_event(
                 "llm_decision_returned",
                 {
@@ -487,11 +566,17 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                     "policy": {"decision": "allow", "reason": "no_action"},
                     "actions": [],
                     "execution": {"success": True, "failures": [], "executed_tools": []},
+                    "timings_ms": {
+                        "nl_router": round((t_nl_router - t0) * 1000, 1),
+                        "state": round((t_state - t_before_state) * 1000, 1),
+                        "t_decision": round((t_decision - t_state) * 1000, 1),
+                    },
                 }
 
             plan = agent.orchestrator.handle_request(
                 intent=choice.intent, args=choice.args, state=state
             )
+            t_plan = time.perf_counter()
             policy = plan["decision"].model_dump()
             if plan["decision"].decision == "deny":
                 agent.kv.append_event(
@@ -503,12 +588,15 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                         "humidity_pct": state.get("humidity_pct"),
                     },
                 )
+
             execution = agent.runner.execute_actions(
                 correlation_id=plan["correlation_id"],
                 actions=plan["actions"],
                 cooldown_key=plan.get("cooldown_key"),
                 cooldown_seconds=int(plan.get("cooldown_seconds", 0)),
+                deadline=deadline,
             )
+            t_exec = time.perf_counter()
             agent.kv.append_event(
                 "llm_intent_executed",
                 {
@@ -532,15 +620,25 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                 "policy": policy,
                 "actions": [a.model_dump() for a in plan["actions"]],
                 "execution": execution,
+                "timings_ms": {
+                    "nl_router": round((t_nl_router - t0) * 1000, 1),
+                    "state": round((t_state - t_before_state) * 1000, 1),
+                    "decision": round((t_decision - t_state) * 1000, 1),
+                    "plan": round((t_plan - t_decision) * 1000, 1),
+                    "exec": round((t_exec - t_plan) * 1000, 1),
+                },
             }
 
         plan = app.state.agent.orchestrator.handle_request(intent=intent, args=args, state=state)
+        t_plan = time.perf_counter()
         execution = app.state.agent.runner.execute_actions(
             correlation_id=plan["correlation_id"],
             actions=plan["actions"],
             cooldown_key=plan.get("cooldown_key"),
             cooldown_seconds=int(plan.get("cooldown_seconds", 0)),
+            deadline=deadline,
         )
+        t_exec = time.perf_counter()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -551,6 +649,12 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
         "decision": plan["decision"].model_dump(),
         "actions": [a.model_dump() for a in plan["actions"]],
         "execution": execution,
+        "timings_ms": {
+            "nl_router": round((t_nl_router - t0) * 1000, 1),
+            "state": round((t_state - t_before_state) * 1000, 1),
+            "plan": round((t_plan - t_state) * 1000, 1),
+            "exec": round((t_exec - t_plan) * 1000, 1),
+        },
     }
 
 

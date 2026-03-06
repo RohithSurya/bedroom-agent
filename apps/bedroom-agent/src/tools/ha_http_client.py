@@ -40,6 +40,7 @@ class HAToolClientHTTP:
             return result
 
         # ACTIVE mode: real HTTP call
+        timeout = call.timeout_s if call.timeout_s is not None else self.timeout_s
         resp = requests.post(
             self._url(f"/tool/{call.tool}"),
             json={
@@ -47,7 +48,7 @@ class HAToolClientHTTP:
                 "idempotency_key": call.idempotency_key,
                 "args": call.args,
             },
-            timeout=self.timeout_s,
+            timeout=timeout,
         )
         data = resp.json()
         result = ToolResult(

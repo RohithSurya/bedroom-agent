@@ -38,4 +38,4 @@ services:
       - /run/udev:/run/udev:ro
     devices:
       # Replace with your real ZBT-2 by-id path:
-      - /dev/serial/by-id/usb-Nabu_Casa_ZBT-2_1CDBD45E756C-if00 -> ../../ttyACM0
+      - /dev/serial/by-id/usb-Nabu_Casa_ZBT-2_1CDBD45E756C-if00:/dev/ttyACM0

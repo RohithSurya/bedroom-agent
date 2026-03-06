@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ import yaml
 
 # Make `src/` importable
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC = REPO_ROOT / "src"
+SRC = REPO_ROOT / "apps" / "bedroom-agent" / "src"
 sys.path.insert(0, str(SRC))
 
 from agent.orchestrator import Orchestrator  # noqa: E402
@@ -47,23 +48,53 @@ class StepResult:
     committed_cooldowns: dict[str, int]
 
 
-def run_mode(scenario: dict[str, Any], mode: str, logger: JsonlLogger) -> list[StepResult]:
+@dataclass
+class SimulatedCooldownStore:
+    """Deterministic cooldown tracker driven by scenario `advance_seconds`."""
+
+    now_s: int = 0
+    _last_allowed: dict[str, tuple[int, int]] = field(default_factory=dict)
+
+    def advance(self, seconds: int) -> None:
+        self.now_s += int(seconds)
+
+    def can_run(self, key: str, cooldown_seconds: int) -> tuple[bool, int]:
+        last = self._last_allowed.get(key)
+        if last is None:
+            return True, 0
+
+        last_ts, last_cd = last
+        cd = max(int(cooldown_seconds), int(last_cd))
+        elapsed = int(self.now_s) - int(last_ts)
+        remaining = max(0, ceil(cd - elapsed))
+        if remaining > 0:
+            return False, remaining
+        return True, 0
+
+    def mark_ran(self, key: str, cooldown_seconds: int) -> None:
+        self._last_allowed[key] = (int(self.now_s), int(cooldown_seconds))
+
+
+def run_mode(
+    scenario: dict[str, Any], mode: str, logger: JsonlLogger
+) -> list[StepResult]:
     """
     mode = 'shadow' or 'active'
     Shadow: does not commit effects to state
     Active: commits cooldown updates to state
     """
-    orch = Orchestrator()
-
     state = dict(scenario.get("initial_state", {}))
-    state.setdefault("now_s", 0)
-    state.setdefault("cooldowns", {})
+    cooldowns = SimulatedCooldownStore(now_s=int(state.get("now_s", 0)))
+    orch = Orchestrator(cooldowns=cooldowns)
+
+    state.pop("now_s", None)
+    state.pop("cooldowns", None)
 
     results: list[StepResult] = []
 
     for idx, step in enumerate(scenario.get("steps", []), start=1):
         advance = int(step.get("advance_seconds", 0))
-        state["now_s"] = int(state["now_s"]) + advance
+        cooldowns.advance(advance)
 
         req = step.get("request", {})
         intent = req.get("intent", "")
@@ -81,7 +112,7 @@ def run_mode(scenario: dict[str, Any], mode: str, logger: JsonlLogger) -> list[S
             payload={
                 "mode": mode,
                 "step": idx,
-                "now_s": state["now_s"],
+                "now_s": cooldowns.now_s,
                 "intent": intent,
                 "args": args,
                 "state": state,
@@ -105,15 +136,16 @@ def run_mode(scenario: dict[str, Any], mode: str, logger: JsonlLogger) -> list[S
             and decision_obj.decision == "allow"
             and decision_obj.cooldown_seconds > 0
         ):
-            until = int(state["now_s"]) + int(decision_obj.cooldown_seconds)
-            # store cooldown per intent
-            state["cooldowns"][f"{intent}_until"] = until
-            committed[f"{intent}_until"] = until
+            key = out.get("cooldown_key")
+            seconds = int(out.get("cooldown_seconds", decision_obj.cooldown_seconds))
+            if key and seconds > 0:
+                cooldowns.mark_ran(str(key), seconds)
+                committed[f"{intent}_until"] = int(cooldowns.now_s) + seconds
 
         results.append(
             StepResult(
                 step_idx=idx,
-                now_s=int(state["now_s"]),
+                now_s=int(cooldowns.now_s),
                 intent=intent,
                 decision=decision_obj.decision,
                 reason=decision_obj.reason,
@@ -176,7 +208,9 @@ def diff_report(shadow: list[StepResult], active: list[StepResult]) -> dict[str,
 
 def main() -> int:
     scenario_path = (
-        Path(sys.argv[1]) if len(sys.argv) > 1 else Path("evals/scenarios/night_mode_ab.yaml")
+        Path(sys.argv[1])
+        if len(sys.argv) > 1
+        else Path("evals/scenarios/night_mode_ab.yaml")
     )
     scenario = _load_yaml(scenario_path)
 
@@ -194,15 +228,21 @@ def main() -> int:
     print(f"Mismatch steps: {report['mismatch_steps']}\n")
 
     if report["mismatch_steps"] == 0:
-        print("✅ No differences (shadow and active behave the same for this scenario).")
+        print(
+            "✅ No differences (shadow and active behave the same for this scenario)."
+        )
     else:
         for m in report["mismatches"]:
             print(f"Step {m['step']} @ t={m['now_s']}s intent={m['intent']}")
             for d in m["diffs"]:
                 if d["type"] == "decision":
                     print(f"  - DECISION mismatch:")
-                    print(f"    shadow: {d['shadow']['decision']} ({d['shadow']['reason']})")
-                    print(f"    active: {d['active']['decision']} ({d['active']['reason']})")
+                    print(
+                        f"    shadow: {d['shadow']['decision']} ({d['shadow']['reason']})"
+                    )
+                    print(
+                        f"    active: {d['active']['decision']} ({d['active']['reason']})"
+                    )
                 elif d["type"] == "actions":
                     print(f"  - ACTIONS mismatch:")
                     print(f"    shadow: {d['shadow']}")

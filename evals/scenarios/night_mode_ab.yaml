@@ -11,7 +11,7 @@ steps:
       intent: night_mode
       args: {}
 
-  - advance_seconds: 60
+  - advance_seconds: 30
     request:
       intent: night_mode
       args: {}

@@ -34,11 +34,12 @@ class HAToolClientReal:
             )
 
         try:
+            timeout = self.timeout_s if self.timeout_s is not None else 8.0
             r = requests.post(
                 self._url(f"/api/services/{domain}/{service}"),
                 headers=self._headers(),
                 json=payload,
-                timeout=self.timeout_s,
+                timeout=timeout,
             )
             ok = 200 <= r.status_code < 300
             return ToolResult(
@@ -140,7 +141,9 @@ class HAToolClientReal:
             hvac_mode = str(call.args.get("hvac_mode", "off")).lower()
             if hvac_mode not in ("off", "cool", "fan_only", "auto"):
                 return ToolResult(
-                    ok=False, tool=tool, details={"error": "invalid_hvac_mode", "hvac_mode": hvac_mode}
+                    ok=False,
+                    tool=tool,
+                    details={"error": "invalid_hvac_mode", "hvac_mode": hvac_mode},
                 )
             return self._post_service(
                 "climate",
@@ -156,7 +159,10 @@ class HAToolClientReal:
                 return ToolResult(
                     ok=False,
                     tool=tool,
-                    details={"error": "invalid_temperature", "temperature": call.args.get("temperature")},
+                    details={
+                        "error": "invalid_temperature",
+                        "temperature": call.args.get("temperature"),
+                    },
                 )
             return self._post_service(
                 "climate",

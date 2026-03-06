@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-import warnings
 
 
 @dataclass
@@ -34,19 +32,7 @@ class SqliteKV:
             parent.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
-
-        if os.access(parent, os.W_OK):
-            return db_path
-
-        fallback_dir = app_root / ".local" / "data"
-        fallback_dir.mkdir(parents=True, exist_ok=True)
-        fallback_path = fallback_dir / db_path.name
-        warnings.warn(
-            f"SQLite directory '{parent}' is not writable; using '{fallback_path}' instead.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return fallback_path
+        return db_path
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, check_same_thread=False)

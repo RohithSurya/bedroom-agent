@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+import random
+import time
+from reliability.retry import RetryPolicy
 
 from contracts.ha import ToolCall, ToolResult
 from core.cooldowns import CooldownStore
 from core.ids import new_idempotency_key
 from core.logging_jsonl import JsonlLogger
 from tools.tool_executor import ToolExecutor
+from reliability.circuit_breaker import CircuitBreaker
+from reliability.deadline import Deadline
 
 
 @dataclass
@@ -21,9 +26,108 @@ class Runner:
         )
     )
     retry_attempts: int = 1  # v0 default
+    tool_retry_policy: RetryPolicy = field(default_factory=lambda: RetryPolicy(max_attempts=1))
+    tool_timeout_s: float = 8.0  # extra safety, especially for HTTP/HA
+    ha_breaker: CircuitBreaker = field(
+        default_factory=lambda: CircuitBreaker(failure_threshold=3, recovery_timeout_s=10.0)
+    )
 
     def read_entity_state(self, entity_id: str) -> dict[str, Any]:
         return self._read_entity_state(entity_id)
+
+    def _is_retryable_tool(self, call: ToolCall) -> bool:
+        # Don't retry speech (can double-speak). Most HA state-setting tools are idempotent.
+        return call.tool != "tts.say"
+
+    def _log_breaker_transition(
+        self, correlation_id: str, before: str, after: str, *, tool: str
+    ) -> None:
+        if before != after:
+            self.logger.write(
+                correlation_id=correlation_id,
+                event_type="breaker_transition",
+                payload={"tool": tool, "before": before, "after": after},
+            )
+
+    def _is_transient_failure(self, result: ToolResult) -> bool:
+        d = result.details or {}
+        err = str(d.get("error", "")).lower()
+        status = d.get("status")
+
+        if status in (502, 503, 504):
+            return True
+        if "timeout" in err or "unreachable" in err:
+            return True
+        if err in ("ha_unreachable", "simulated_timeout", "simulated_error"):
+            return True
+        return False
+
+    def _execute_with_transient_retries(
+        self, call: ToolCall, deadline: Deadline | None = None
+    ) -> ToolResult:
+        if deadline is not None and deadline.expired():
+            return ToolResult(ok=False, tool=call.tool, details={"error": "deadline_exceeded"})
+        policy = self.tool_retry_policy
+        attempts = max(1, int(policy.max_attempts))
+
+        last: ToolResult | None = None
+
+        if self._is_retryable_tool(call) and (not self.ha_breaker.allow()):
+            return ToolResult(
+                ok=False,
+                tool=call.tool,
+                details={"error": "circuit_open", "breaker_state": self.ha_breaker.state()},
+            )
+        for attempt in range(1, attempts + 1):
+            try:
+                # executor.execute usually doesn't raise, but HTTP libs sometimes do
+                timeout = self.tool_timeout_s
+                if deadline is not None:
+                    # keep a tiny safety margin so we can still return/log cleanly
+                    timeout = max(0.2, min(timeout, deadline.remaining() - 0.05))
+
+                call2 = call.model_copy(update={"timeout_s": timeout})
+                res = self.executor.execute(call2)
+                before = self.ha_breaker.state()
+
+                if res.ok:
+                    self.ha_breaker.record_success()
+                else:
+                    if self._is_transient_failure(res):
+                        self.ha_breaker.record_failure()
+                    else:
+                        # HA responded; not an outage-type failure
+                        self.ha_breaker.record_success()
+
+                after = self.ha_breaker.state()
+                self._log_breaker_transition(call.correlation_id, before, after, tool=call.tool)
+            except Exception as e:  # noqa: BLE001
+                res = ToolResult(
+                    ok=False, tool=call.tool, details={"error": "tool_exception", "exc": str(e)}
+                )
+
+            last = res
+            if res.ok:
+                return res
+
+            # If not ok: decide whether to retry
+            if (not self._is_retryable_tool(call)) or (not self._is_transient_failure(res)):
+                return res
+
+            # sleep before next attempt (exponential backoff + jitter)
+            if attempt < attempts:
+                delay = min(policy.base_delay_s * (2 ** (attempt - 1)), policy.max_delay_s)
+                delay += random.uniform(0, policy.jitter_s)
+
+                if deadline is not None:
+                    delay = min(delay, max(0.0, deadline.remaining() - 0.05))
+
+                if delay <= 0.0:
+                    return res
+                time.sleep(delay)
+
+        assert last is not None
+        return last
 
     def _read_entity_state(self, entity_id: str) -> dict[str, Any]:
         """
@@ -179,7 +283,13 @@ class Runner:
         actions: list[ToolCall],
         cooldown_key: str | None = None,
         cooldown_seconds: int = 0,
+        deadline: Deadline | None = None,
     ) -> dict[str, Any]:
+        if deadline is not None and deadline.expired():
+            return {
+                "success": False,
+                "failures": [{"reason": "deadline_exceeded", "details": {"where": "runner_start"}}],
+            }
         failures: list[dict[str, Any]] = []
         executed_tools: list[str] = []
         light_ok = True
@@ -193,7 +303,7 @@ class Runner:
 
             # Execute + log
             print(f"Executing tool: {call.tool} with args {call.args}")  # for visibility in logs
-            result = self.executor.execute(call)
+            result = self._execute_with_transient_retries(call, deadline)
             executed_tools.append(call.tool)
             self.logger.write(
                 correlation_id=correlation_id, event_type="tool_result", payload=result.model_dump()
@@ -206,6 +316,17 @@ class Runner:
                 event_type="verification",
                 payload={"tool": call.tool, "verify": verify},
             )
+
+            # Generic failure tracking: if an actuator call failed, it's a failure.
+            # (Keep tts.say best-effort so you still get an explanation even when HA is flaky.)
+            if (call.tool != "tts.say") and (not result.ok):
+                failures.append(
+                    {
+                        "tool": call.tool,
+                        "reason": "tool_failed",
+                        "details": {"result": result.details},
+                    }
+                )
 
             if self._is_lighting_call(call):
                 attempts_left = self.retry_attempts

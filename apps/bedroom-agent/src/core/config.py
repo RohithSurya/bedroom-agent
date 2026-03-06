@@ -73,3 +73,6 @@ class Settings(BaseSettings):
     # Quiet hours (optional but nice)
     QUIET_HOURS_START: str = "00:00"  # HH:MM
     QUIET_HOURS_END: str = "00:00"  # HH:MM
+
+    # Reliability tuning (for evals and real-world robustness)
+    REQUEST_BUDGET_S: float = 12.0

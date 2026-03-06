@@ -174,7 +174,9 @@ class ToolExecutor:
             hvac_mode = str(call.args.get("hvac_mode", "off")).lower()
             if hvac_mode not in ("off", "cool", "fan_only", "auto"):
                 result = ToolResult(
-                    ok=False, tool=call.tool, details={"error": "invalid_hvac_mode", "hvac_mode": hvac_mode}
+                    ok=False,
+                    tool=call.tool,
+                    details={"error": "invalid_hvac_mode", "hvac_mode": hvac_mode},
                 )
             else:
                 self.device_state["climate"].setdefault(entity_id, {})
@@ -194,7 +196,10 @@ class ToolExecutor:
                 result = ToolResult(
                     ok=False,
                     tool=call.tool,
-                    details={"error": "invalid_temperature", "temperature": call.args.get("temperature")},
+                    details={
+                        "error": "invalid_temperature",
+                        "temperature": call.args.get("temperature"),
+                    },
                 )
             else:
                 self.device_state["climate"].setdefault(entity_id, {})
@@ -210,7 +215,9 @@ class ToolExecutor:
             fan_mode = str(call.args.get("fan_mode", "auto")).lower()
             if fan_mode not in ("auto", "low", "medium", "high"):
                 result = ToolResult(
-                    ok=False, tool=call.tool, details={"error": "invalid_fan_mode", "fan_mode": fan_mode}
+                    ok=False,
+                    tool=call.tool,
+                    details={"error": "invalid_fan_mode", "fan_mode": fan_mode},
                 )
             else:
                 self.device_state["climate"].setdefault(entity_id, {})

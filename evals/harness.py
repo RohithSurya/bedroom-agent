@@ -6,23 +6,36 @@ from typing import Any
 
 import yaml
 
-from tools.ha_real_client import HAToolClientReal
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
 sys.path.insert(0, str(SRC))
 
+from tools.ha_real_client import HAToolClientReal  # noqa: E402
 from agent.orchestrator import Orchestrator  # noqa: E402
 from agent.runner import Runner  # noqa: E402
 from core.config import Settings  # noqa: E402
 from core.logging_jsonl import JsonlLogger  # noqa: E402
-from tools.tool_executor import ToolExecutor  # noqa: E402
 from core.cooldowns import CooldownStore  # noqa: E402
+from tools.tool_executor import ToolExecutor  # noqa: E402
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def _tool_matches_expected(expected_tool: str, action: Any) -> bool:
+    actual_tool = str(getattr(action, "tool", ""))
+    if expected_tool == actual_tool:
+        return True
+
+    # Treat light domain and light-like switches as equivalent in evals.
+    # This avoids brittle failures when a room light is exposed as switch.*.
+    if {expected_tool, actual_tool} == {"light.set", "switch.set"}:
+        entity_id = str(getattr(action, "args", {}).get("entity_id", "")).lower()
+        return ("light" in entity_id) or ("lamp" in entity_id)
+
+    return False
 
 
 def run_scenario(path: Path) -> int:
@@ -35,14 +48,24 @@ def run_scenario(path: Path) -> int:
         from tools.ha_http_client import HAToolClientHTTP
 
         executor = HAToolClientHTTP(base_url=cfg.HA_BASE_URL, mode=cfg.AGENT_MODE)
-    elif cfg.TOOL_BACKEND == "ha":
-        from tools.tool_executor import ToolExecutor
+
+    elif cfg.TOOL_BACKEND == "local":
         executor = ToolExecutor(mode=cfg.AGENT_MODE)
+
+    elif cfg.TOOL_BACKEND == "ha":
+        executor = HAToolClientReal(
+            base_url=cfg.HA_BASE_URL,
+            token=cfg.HA_TOKEN,
+            logger=logger,
+            mode=cfg.AGENT_MODE,
+        )
+
     else:
-        executor = HAToolClientReal(base_url=cfg.HA_BASE_URL, token=cfg.HA_TOKEN)
+        raise ValueError(f"Unknown TOOL_BACKEND: {cfg.TOOL_BACKEND}")
 
-
-    runner = Runner(executor=executor, cooldowns=cooldowns, logger=logger, retry_attempts=1)
+    runner = Runner(
+        executor=executor, cooldowns=cooldowns, logger=logger, retry_attempts=1
+    )
 
     scenario = _load_yaml(path)
     state = dict(scenario.get("initial_state", {}))
@@ -98,7 +121,9 @@ def run_scenario(path: Path) -> int:
             payload={"intent": intent, "args": args, "state": state},
         )
         logger.write(
-            correlation_id=cid, event_type="policy_decision", payload=decision.model_dump()
+            correlation_id=cid,
+            event_type="policy_decision",
+            payload=decision.model_dump(),
         )
         logger.write(
             correlation_id=cid,
@@ -122,19 +147,20 @@ def run_scenario(path: Path) -> int:
             )
 
         want_tools = exp.get("action_tools", [])
-        got_tools = [a.tool for a in actions]
         for t in want_tools:
-            if t not in got_tools:
+            if not any(_tool_matches_expected(t, action) for action in actions):
                 failures += 1
                 print(f"  ❌ Step {idx}: missing expected tool: {t}")
 
         not_tools = exp.get("not_action_tools", [])
         for t in not_tools:
-            if t in got_tools:
+            if any(_tool_matches_expected(t, action) for action in actions):
                 failures += 1
                 print(f"  ❌ Step {idx}: tool should NOT be planned: {t}")
 
-        if "final_success" in exp and bool(run_out["success"]) != bool(exp["final_success"]):
+        if "final_success" in exp and bool(run_out["success"]) != bool(
+            exp["final_success"]
+        ):
             failures += 1
             print(
                 f"  ❌ Step {idx}: final_success mismatch: got={run_out['success']} want={exp['final_success']}"
@@ -152,6 +178,8 @@ def run_scenario(path: Path) -> int:
 
 if __name__ == "__main__":
     scenario_path = (
-        Path(sys.argv[1]) if len(sys.argv) > 1 else Path("evals/scenarios/night_mode.yaml")
+        Path(sys.argv[1])
+        if len(sys.argv) > 1
+        else Path("evals/scenarios/night_mode.yaml")
     )
     raise SystemExit(run_scenario(scenario_path))

@@ -8,6 +8,7 @@ class ToolCall(BaseModel):
     args: dict = Field(default_factory=dict)
     idempotency_key: str
     correlation_id: str
+    timeout_s: float | None = None
 
 
 class ToolResult(BaseModel):
