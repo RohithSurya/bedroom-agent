@@ -1,8 +1,4 @@
-# This is the correct Youtube URL: https://youtu.be/oJxBTXyXbbU.
-
-The one published in the hackeriterate is the wrong link. Please consider my mistake and use this link to watch the demo
-
-
+# Demo YouTube URL: https://youtu.be/oJxBTXyXbbU.
 
 # bedroom-agent
 
