@@ -773,6 +773,7 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
             plan = agent.orchestrator.handle_request(
                 intent=choice.intent, args=choice.args, state=state
             )
+            print(f"Plan from orchestrator: {plan}")
             t_plan = time.perf_counter()
             policy = plan["decision"].model_dump()
             if plan["decision"].decision == "deny":
@@ -827,6 +828,7 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
             }
 
         plan = app.state.agent.orchestrator.handle_request(intent=intent, args=args, state=state)
+        print(f"Plan from orchestrator: {plan}")
         t_plan = time.perf_counter()
         execution = app.state.agent.runner.execute_actions(
             correlation_id=plan["correlation_id"],

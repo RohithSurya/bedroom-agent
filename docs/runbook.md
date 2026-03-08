@@ -59,7 +59,7 @@ cd wyoming
 docker compose up -d
 ```
 
-This compose file currently starts `faster-whisper`.
+This compose file starts `faster-whisper` and `wyoming-piper`.
 
 ## Environment Setup
 

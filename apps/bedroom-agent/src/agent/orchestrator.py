@@ -54,9 +54,7 @@ class Orchestrator:
 
             if decision.decision == "allow":
                 actions.append(self.action_factory.fan(entity_id=entity_id, state=desired))
-                actions.append(
-                    self.action_factory.speech(message=f"Fan {desired}.")
-                )
+                actions.append(self.action_factory.speech(message=f"Fan {desired}."))
             else:
                 actions.append(
                     self.action_factory.speech(
@@ -111,7 +109,9 @@ class Orchestrator:
         decision = PolicyDecision(
             decision="deny", reason=f"unknown_intent:{intent}", cooldown_seconds=0, safety_checks=[]
         )
-        actions = [self.action_factory.speech(message=f"Blocked: {_humanize_reason(decision.reason)}")]
+        actions = [
+            self.action_factory.speech(message=f"Blocked: {_humanize_reason(decision.reason)}")
+        ]
         return {
             "correlation_id": cid,
             "decision": decision,
@@ -136,20 +136,14 @@ class Orchestrator:
             light_entity_id = self._resolve_light_entity_id(args=args, state=state)
             if str(state.get("light_state", "")).lower() != "off":
                 actions.append(self.action_factory.light(entity_id=light_entity_id, state="off"))
-
-            if (
-                bool(state.get("sleep_mode_enable_climate"))
-                and bool(state.get("room_uncomfortable"))
-                and bool(state.get("ac_available"))
-            ):
-                actions.append(
-                    self.action_factory.climate(
-                        entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
-                        hvac_mode="cool",
-                        temperature=int(state.get("sleep_target_temp_c", 24)),
-                        fan_mode="low",
-                    )
+            actions.append(
+                self.action_factory.climate(
+                    entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
+                    hvac_mode="fan_only",
+                    temperature=None,
+                    fan_mode="low",
                 )
+            )
             actions.append(self.action_factory.speech(message="Sleep mode on."))
         return {
             "correlation_id": cid,
@@ -176,25 +170,24 @@ class Orchestrator:
             if str(state.get("light_state", "")).lower() != "on":
                 actions.append(self.action_factory.light(entity_id=light_entity_id, state="on"))
 
-            if bool(state.get("room_uncomfortable")):
-                if bool(state.get("focus_mode_enable_climate")) and bool(state.get("ac_available")):
-                    actions.append(
-                        self.action_factory.climate(
-                            entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
-                            hvac_mode="cool",
-                            temperature=int(state.get("comfort_target_temp_c", 24)),
-                            fan_mode="auto",
-                        )
+            if bool(state.get("focus_mode_enable_climate")) and bool(state.get("ac_available")):
+                actions.append(
+                    self.action_factory.climate(
+                        entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
+                        hvac_mode="fan_only",
+                        temperature=None,
+                        fan_mode="low",
                     )
-                elif bool(state.get("focus_mode_enable_fan")) and bool(
-                    state.get("comfort_use_fan_fallback")
-                ):
-                    actions.append(
-                        self.action_factory.fan(
-                            entity_id=str(state.get("fan_entity_id", "fan.bedroom_fan")),
-                            state="on",
-                        )
+                )
+            elif bool(state.get("focus_mode_enable_fan")) and bool(
+                state.get("comfort_use_fan_fallback")
+            ):
+                actions.append(
+                    self.action_factory.fan(
+                        entity_id=str(state.get("fan_entity_id", "fan.bedroom_fan")),
+                        state="on",
                     )
+                )
             actions.append(self.action_factory.speech(message="Focus mode on."))
         return {
             "correlation_id": cid,
@@ -298,7 +291,9 @@ class Orchestrator:
         )
 
     def _resolve_light_entity_id(self, *, args: dict[str, Any], state: dict[str, Any]) -> str:
-        return str(args.get("light_entity_id") or state.get("light_entity_id") or "light.bedroom_light")
+        return str(
+            args.get("light_entity_id") or state.get("light_entity_id") or "light.bedroom_light"
+        )
 
     def _materialize_actions(
         self, correlation_id: str, actions: list[AgentAction]

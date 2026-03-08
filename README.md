@@ -644,7 +644,7 @@ If you change `configuration.yaml`, restart Home Assistant. If you only change a
 ```text
 apps/bedroom-agent/             FastAPI agent service, Dockerfile, tests
 infra/home-automation/ha_config Home Assistant YAML config
-wyoming/                        faster-whisper compose file
+wyoming/                        Wyoming speech service compose file
 docs/                           diagrams, contracts, runbook
 ```
 

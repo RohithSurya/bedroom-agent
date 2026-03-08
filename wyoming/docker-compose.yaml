@@ -1,48 +1,3 @@
-# name: wyoming-stack
-# services:
-#   wyoming-whisper:
-#     image: dustynv/wyoming-whisper:latest-r36.2.0
-#     container_name: wyoming-whisper
-#     runtime: cpu
-#     network_mode: host
-#     restart: unless-stopped
-#     environment:
-#       WHISPER_PORT: "10300"
-#       WHISPER_MODEL: "tiny-int8"   # try: base-int8 or small-int8 for better accuracy
-#       WHISPER_LANGUAGE: "en"
-#       WHISPER_BEAM_SIZE: "1"
-#       WHISPER_DEBUG: "true"
-#     volumes:
-#       - whisper-models:/share/whisper
-#       - whisper-data:/data
-#       - /etc/localtime:/etc/localtime:ro
-#       - /etc/timezone:/etc/timezone:ro
-
-#   # wyoming-piper:
-#   #   image: dustynv/wyoming-piper:master-r36.2.0
-#   #   container_name: wyoming-piper
-#   #   runtime: nvidia
-#   #   network_mode: host
-#   #   restart: unless-stopped
-#   #   environment:
-#   #     PIPER_PORT: "10200"
-#   #     PIPER_VOICE: "en_US-lessac-high"  # can also use en_US-lessac-medium
-#   #     PIPER_UPDATE_VOICES: "true"
-#   #   volumes:
-#   #     - piper-models:/data/models/piper
-#   #     - /etc/localtime:/etc/localtime:ro
-#   #     - /etc/timezone:/etc/timezone:ro
-#   #   devices:f
-#   #     - /dev/snd:/dev/snd
-#   #     - /dev/bus/usb
-
-# volumes:
-#   whisper-models:
-#   whisper-data:
-#   # piper-models:
-
-
-
 services:
   faster-whisper:
     image: lscr.io/linuxserver/faster-whisper:latest
@@ -64,24 +19,19 @@ services:
       - /etc/timezone:/etc/timezone:ro
     restart: unless-stopped
 
+  wyoming-piper:
+    image: rhasspy/wyoming-piper
+    container_name: wyoming-piper
+    network_mode: host
+    volumes:
+      - piper-models:/data
+    command: --voice en_US-hfc_male-medium
+    restart: unless-stopped
 
-    wyoming-piper:
-      image: dustynv/wyoming-piper:master-r36.2.0
-      container_name: wyoming-piper
-      runtime: nvidia
-      network_mode: host
-      restart: unless-stopped
-      environment:
-        PIPER_PORT: "10200"
-        PIPER_VOICE: "en_US-lessac-high"  # can also use en_US-lessac-medium
-        PIPER_UPDATE_VOICES: "true"
-      volumes:
-        - piper-models:/data/models/piper
-        - /etc/localtime:/etc/localtime:ro
-        - /etc/timezone:/etc/timezone:ro
+
 
 
 volumes:
   whisper-models-linux:
   whisper-data-linux:
-  # piper-models:
+  piper-models:

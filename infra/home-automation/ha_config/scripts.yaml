@@ -149,14 +149,13 @@ bedroom_agent_speak:
 
     - service: tts.speak
       target:
-        entity_id: tts.google_translate_en_com
+        entity_id: tts.piper
       data:
         media_player_entity_id: "{{ player }}"
         message: "{{ message }}"
         cache: true
         options:
           preferred_format: mp3
-          tld: co.in
       continue_on_error: true
 
     - delay: "{{ restore_delay_s }}"
