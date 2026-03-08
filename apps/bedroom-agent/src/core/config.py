@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     CAMERA_MODE: str = "device"  # "ha_snapshot", "file", or "device"
     CAMERA_ENTITY_ID: str = ""
     CAMERA_DEVICE: str = "/dev/video0"
-    CAMERA_WIDTH: int = 640
-    CAMERA_HEIGHT: int = 480
+    CAMERA_WIDTH: int = 1920
+    CAMERA_HEIGHT: int = 1080
     CAMERA_SKIP_FRAMES: int = 30
     VISION_FALLBACK_IMAGE_PATH: str = ""
     VISION_DEBUG_SAVE_DIR: str = "/home/rosurya/bedroom-agent/apps/bedroom-agent/data/debug"

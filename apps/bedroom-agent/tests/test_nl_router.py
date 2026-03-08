@@ -16,6 +16,9 @@ def test_router_maps_demo_prompts_to_status_and_analysis():
     intent, args = router.route(text="Is this room good for focus?", state={})
     assert intent == "analyze_bedroom"
 
+    intent, args = router.route(text="Do you see a monitor on the desk?", state={})
+    assert intent == "analyze_bedroom"
+
 
 def test_router_maps_explicit_mode_prompts_directly():
     router = NLRouter(llm=None)

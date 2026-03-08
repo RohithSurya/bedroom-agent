@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -46,6 +47,63 @@ ROOM_ANALYSIS_SIMPLE_SCHEMA: dict[str, Any] = {
     },
 }
 
+GENERIC_ANALYSIS_MARKERS: tuple[str, ...] = (
+    "analyze bedroom",
+    "analyze my bedroom",
+    "analyze the bedroom",
+    "analyze room",
+    "analyze my room",
+    "analyze the room",
+    "check bedroom",
+    "check my bedroom",
+    "check the bedroom",
+    "check room",
+    "check my room",
+    "check the room",
+)
+
+QUERY_STOPWORDS: set[str] = {
+    "a",
+    "an",
+    "any",
+    "are",
+    "can",
+    "could",
+    "desk",
+    "do",
+    "does",
+    "for",
+    "i",
+    "in",
+    "is",
+    "it",
+    "my",
+    "of",
+    "on",
+    "please",
+    "room",
+    "see",
+    "tell",
+    "the",
+    "there",
+    "what",
+    "where",
+    "you",
+}
+
+QUERY_CONTEXT_TOKENS: set[str] = {
+    "bed",
+    "bedroom",
+    "chair",
+    "closet",
+    "desk",
+    "dresser",
+    "floor",
+    "mirror",
+    "nightstand",
+    "room",
+}
+
 
 @dataclass
 class BedroomRoomAnalyzer:
@@ -57,6 +115,7 @@ class BedroomRoomAnalyzer:
     max_output_tokens: int = 120
 
     def analyze(self, query: str) -> dict[str, Any]:
+        analysis_query = self._clean_query(query)
         if not self.enabled:
             result = self._failure_result("Vision analysis is disabled in configuration.")
             self.kv.append_event("bedroom_analysis_failed", {"reason": "vision_disabled"})
@@ -72,7 +131,7 @@ class BedroomRoomAnalyzer:
             )
             return result
 
-        structured = self._llm_analysis(query=query, image=image)
+        structured = self._llm_analysis(query=analysis_query, image=image)
         if structured is None:
             result = self._failure_result(
                 f"I retrieved a bedroom image from {image['source']}, but vision analysis is unavailable right now."
@@ -87,8 +146,10 @@ class BedroomRoomAnalyzer:
             **structured,
             "source": image["source"],
             "detail": image.get("detail", ""),
-            "query": query,
+            "query": analysis_query,
         }
+        if analysis_query != query:
+            stored["raw_query"] = query
         for key in ("device", "captured_at_ms", "debug_path", "image_sha256", "path"):
             if key in image and image[key] is not None:
                 stored[key] = image[key]
@@ -105,7 +166,9 @@ class BedroomRoomAnalyzer:
             },
         )
         response_summary = (
-            structured["query_answer"] if self._is_specific_query(query) else structured["summary"]
+            structured["query_answer"]
+            if self._is_specific_query(analysis_query)
+            else structured["summary"]
         )
         return {"summary": response_summary, "structured": stored}
 
@@ -135,7 +198,10 @@ class BedroomRoomAnalyzer:
 
         out = self._coerce_analysis(out, query=query)
         if self._is_low_signal(out, query):
-            out = self._retry_simple_summary(query=query, image_b64=image_b64)
+            if self._is_specific_query(query):
+                out = self._retry_specific_query(query=query, image_b64=image_b64)
+            else:
+                out = self._retry_simple_summary(query=query, image_b64=image_b64)
 
         if not self._valid_analysis(out):
             return None
@@ -169,6 +235,33 @@ class BedroomRoomAnalyzer:
             )
         except Exception:
             return {}
+
+    def _retry_specific_query(self, *, query: str, image_b64: str) -> dict[str, Any]:
+        if self.llm is None:
+            return {}
+        prompt = (
+            "Analyze one bedroom image and return grounded JSON only. "
+            f"Answer this exact visual question: {query}. "
+            "Do not give a generic room summary in query_answer. "
+            "If the answer is visible, say so directly. If it is not visible, say that clearly. "
+            "If the image is too unclear, say that it is unclear from the visible image. "
+            "bed_state must be made, partial, or unmade. "
+            "desk_state can be tidy, active, or cluttered. "
+            "issues must be at most 3 short phrases. "
+            "query_answer must answer the exact question in one short sentence. "
+            "summary must be one short sentence describing the overall visible room state."
+        )
+        try:
+            out = self.llm.generate_json(
+                prompt=prompt,
+                schema=ROOM_ANALYSIS_SCHEMA,
+                images_b64=[image_b64],
+                temperature=0.1,
+                num_predict=max(self.max_output_tokens, 140),
+            )
+        except Exception:
+            return {}
+        return self._coerce_analysis(out, query=query)
 
     def _retry_simple_summary(self, *, query: str, image_b64: str) -> dict[str, Any]:
         if self.llm is None:
@@ -316,7 +409,7 @@ class BedroomRoomAnalyzer:
         if not summary and not query_answer:
             return True
         if self._is_specific_query(query):
-            return not query_answer
+            return (not query_answer) or (not self._query_answer_addresses_query(query, query_answer))
         return not summary or (
             not issues
             and bed_state == "made"
@@ -326,16 +419,78 @@ class BedroomRoomAnalyzer:
         )
 
     def _is_specific_query(self, query: str) -> bool:
-        q = (query or "").strip().lower()
-        generic_markers = (
-            "analyze my room",
-            "analyze bedroom",
-            "analyze the room",
-            "check bedroom",
+        cleaned = self._clean_query(query)
+        if not cleaned:
+            return False
+        if self._is_generic_analysis_marker(cleaned):
+            return False
+        normalized = self._normalize_text(cleaned)
+        generic_queries = {
             "is this room good for focus",
             "what should i fix before sleep",
+        }
+        return normalized not in generic_queries
+
+    def _clean_query(self, query: str) -> str:
+        raw = " ".join(str(query or "").strip().split())
+        if not raw:
+            return ""
+        parts = re.split(r"[.?!;\n]+", raw)
+        kept: list[str] = []
+        for part in parts:
+            candidate = part.strip(" ,:-")
+            if candidate and not self._is_generic_analysis_marker(candidate):
+                kept.append(candidate)
+        if kept:
+            return ". ".join(kept)
+        return raw
+
+    def _is_generic_analysis_marker(self, text: str) -> bool:
+        normalized = self._normalize_text(text)
+        if not normalized:
+            return False
+        if normalized in GENERIC_ANALYSIS_MARKERS:
+            return True
+        for prefix in ("please ", "can you ", "could you ", "would you ", "tony "):
+            if normalized.startswith(prefix) and normalized[len(prefix) :] in GENERIC_ANALYSIS_MARKERS:
+                return True
+        return False
+
+    def _normalize_text(self, text: str) -> str:
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(text).lower())).strip()
+
+    def _query_answer_addresses_query(self, query: str, query_answer: str) -> bool:
+        answer_text = self._normalize_text(query_answer)
+        if not answer_text:
+            return False
+        if self._is_bed_advice_query(self._clean_query(query)):
+            return True
+
+        query_tokens = [
+            token
+            for token in self._normalize_text(self._clean_query(query)).split()
+            if len(token) >= 3 and token not in QUERY_STOPWORDS
+        ]
+        salient_tokens = [token for token in query_tokens if token not in QUERY_CONTEXT_TOKENS]
+        context_tokens = [token for token in query_tokens if token in QUERY_CONTEXT_TOKENS]
+
+        if salient_tokens and any(token in answer_text for token in salient_tokens):
+            return True
+
+        direct_prefixes = (
+            "yes",
+            "no",
+            "unclear",
+            "not clear",
+            "cannot tell",
+            "can t tell",
+            "i cannot tell",
+            "i can t tell",
         )
-        return not any(marker in q for marker in generic_markers)
+        if any(answer_text.startswith(prefix) for prefix in direct_prefixes):
+            return not context_tokens or any(token in answer_text for token in context_tokens)
+
+        return not salient_tokens
 
     def _normalize_score(self, value: Any) -> float:
         try:

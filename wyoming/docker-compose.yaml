@@ -65,6 +65,22 @@ services:
     restart: unless-stopped
 
 
+    wyoming-piper:
+      image: dustynv/wyoming-piper:master-r36.2.0
+      container_name: wyoming-piper
+      runtime: nvidia
+      network_mode: host
+      restart: unless-stopped
+      environment:
+        PIPER_PORT: "10200"
+        PIPER_VOICE: "en_US-lessac-high"  # can also use en_US-lessac-medium
+        PIPER_UPDATE_VOICES: "true"
+      volumes:
+        - piper-models:/data/models/piper
+        - /etc/localtime:/etc/localtime:ro
+        - /etc/timezone:/etc/timezone:ro
+
+
 volumes:
   whisper-models-linux:
   whisper-data-linux:

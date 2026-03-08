@@ -182,6 +182,69 @@ def test_room_analyzer_coerces_loose_model_output(tmp_path):
     assert out["structured"]["bed_state"] == "partial"
 
 
+class SpecificQuestionRetryLLM(FakeLLM):
+    def generate_raw(self, *, prompt, images_b64=None, temperature=0.2, num_predict=None):
+        return {
+            "response": (
+                '{"occupied": false,'
+                '"bed_state": "made",'
+                '"desk_state": "active",'
+                '"focus_readiness": 0.6,'
+                '"sleep_readiness": 0.5,'
+                '"issues": ["Laundry on floor"],'
+                '"query_answer": "Room appears occupied. The desk looks actively in use.",'
+                '"summary": "Room appears occupied. The desk looks actively in use."}'
+            ),
+            "done_reason": "stop",
+        }
+
+    def generate_json(
+        self, *, prompt, schema=None, images_b64=None, temperature=0.2, num_predict=None
+    ):
+        assert "Answer this exact visual question" in prompt
+        return {
+            "occupied": False,
+            "bed_state": "made",
+            "desk_state": "active",
+            "focus_readiness": 0.6,
+            "sleep_readiness": 0.5,
+            "issues": ["Laundry on floor"],
+            "query_answer": "Yes, a monitor is visible on the desk.",
+            "summary": "The room looks occupied and the desk is active.",
+        }
+
+
+def test_room_analyzer_strips_generic_suffix_and_retries_for_specific_question(tmp_path):
+    image_path = tmp_path / "bedroom.jpg"
+    image_path.write_bytes(b"fake-image-bytes")
+
+    kv = SqliteKV(str(tmp_path / "memory.sqlite"))
+    source = BedroomImageSource(
+        base_url="http://localhost:8123",
+        token="",
+        camera_mode="file",
+        camera_entity_id="",
+        camera_device="/dev/video0",
+        camera_width=640,
+        camera_height=480,
+        camera_skip_frames=30,
+        fallback_image_path=str(image_path),
+    )
+    analyzer = BedroomRoomAnalyzer(
+        kv=kv,
+        llm=SpecificQuestionRetryLLM(),
+        image_source=source,
+        enabled=True,
+        prompt_profile="general",
+    )
+
+    out = analyzer.analyze("Do you see a monitor on the desk? analyze bedroom")
+
+    assert out["summary"] == "Yes, a monitor is visible on the desk."
+    assert out["structured"]["query"] == "Do you see a monitor on the desk"
+    assert out["structured"]["raw_query"] == "Do you see a monitor on the desk? analyze bedroom"
+
+
 class BedAdviceFakeLLM(FakeLLM):
     def generate_raw(self, *, prompt, images_b64=None, temperature=0.2, num_predict=None):
         return {

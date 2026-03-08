@@ -104,6 +104,8 @@ class NLRouter:
             )
         ):
             return "analyze_bedroom", {}
+        if self._looks_like_visual_query(t):
+            return "analyze_bedroom", {}
         if any(
             k in t
             for k in [
@@ -145,3 +147,38 @@ class NLRouter:
             return intent, args
 
         return "status", {"query": text}
+
+    def _looks_like_visual_query(self, text: str) -> bool:
+        question_markers = (
+            "do you see",
+            "can you see",
+            "is there",
+            "are there",
+            "what is on",
+            "what's on",
+            "what do you see",
+            "does the",
+            "is the",
+            "where is",
+            "how many",
+        )
+        scene_markers = (
+            "bed",
+            "bedroom",
+            "chair",
+            "closet",
+            "desk",
+            "dresser",
+            "floor",
+            "lamp",
+            "laundry",
+            "light",
+            "mirror",
+            "monitor",
+            "pillow",
+            "screen",
+            "table",
+        )
+        return any(marker in text for marker in question_markers) and any(
+            marker in text for marker in scene_markers
+        )
