@@ -136,14 +136,29 @@ class Orchestrator:
             light_entity_id = self._resolve_light_entity_id(args=args, state=state)
             if str(state.get("light_state", "")).lower() != "off":
                 actions.append(self.action_factory.light(entity_id=light_entity_id, state="off"))
-            actions.append(
-                self.action_factory.climate(
-                    entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
-                    hvac_mode="fan_only",
-                    temperature=None,
-                    fan_mode="low",
+
+            if bool(state.get("sleep_mode_enable_climate")) and bool(state.get("ac_available")):
+                actions.append(
+                    self.action_factory.climate(
+                        entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
+                        hvac_mode="cool",
+                        temperature=int(
+                            state.get(
+                                "sleep_target_temp_c",
+                                state.get("comfort_target_temp_c", 24),
+                            )
+                        ),
+                        fan_mode="low",
+                    )
                 )
-            )
+            elif bool(state.get("comfort_use_fan_fallback")):
+                actions.append(
+                    self.action_factory.fan(
+                        entity_id=str(state.get("fan_entity_id", "fan.bedroom_fan")),
+                        state="on",
+                    )
+                )
+
             actions.append(self.action_factory.speech(message="Sleep mode on."))
         return {
             "correlation_id": cid,

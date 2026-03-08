@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC = REPO_ROOT / "src"
+SRC = REPO_ROOT / "apps/bedroom-agent/src"
 sys.path.insert(0, str(SRC))
 
 from tools.ha_real_client import HAToolClientReal  # noqa: E402

@@ -41,15 +41,27 @@ def test_sleep_mode_turns_off_light_and_cools():
     state["light_state"] = "on"
     out = orch.handle_request(intent="sleep_mode", args={}, state=state)
 
-    tools = [call.tool for call in out["actions"]]
     assert out["decision"].decision == "allow"
-    assert tools[0] == "light.set"
-    assert tools[1:] == [
+    assert [call.tool for call in out["actions"]] == [
+        "light.set",
         "climate.set_mode",
         "climate.set_temperature",
         "climate.set_fan_mode",
         "tts.say",
     ]
+    assert out["actions"][1].args["hvac_mode"] == "cool"
+    assert out["actions"][2].args["temperature"] == 24
+    assert out["actions"][3].args["fan_mode"] == "low"
+
+
+def test_sleep_mode_uses_fan_fallback_without_ac():
+    orch = Orchestrator()
+    state = _base_state()
+    state["ac_available"] = False
+    out = orch.handle_request(intent="sleep_mode", args={}, state=state)
+
+    assert out["decision"].decision == "allow"
+    assert [call.tool for call in out["actions"]] == ["fan.set", "tts.say"]
 
 
 def test_focus_start_uses_fan_fallback_without_ac():
