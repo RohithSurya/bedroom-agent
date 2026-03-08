@@ -99,7 +99,7 @@ Operational rules:
 
 Current HA flow:
 
-1. Assist matches one of the configured conversation commands.
+1. Assist matches the catch-all conversation command in `automations.yaml`.
 2. HA calls `rest_command.bedroom_agent_chat`.
 3. The response is parsed in `automations.yaml`.
 4. HA speaks a synthesized reply with `set_conversation_response`.
@@ -157,7 +157,7 @@ Usually this means Home Assistant handled the phrase locally or the automation f
 
 Check:
 
-1. The phrase matches one of the conversation patterns in `automations.yaml`
+1. `automations.yaml` still contains the catch-all `"{command}"` conversation trigger
 2. `rest_command.bedroom_agent_chat` returns HTTP `200`
 3. The response contains either `result.summary` or valid action metadata
 4. Home Assistant has reloaded the changed automation

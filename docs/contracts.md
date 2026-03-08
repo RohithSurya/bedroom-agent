@@ -356,13 +356,12 @@ Current HA integration lives in `infra/home-automation/ha_config`.
 
 ### Voice conversation automation
 
-`automations.yaml` currently routes phrases such as:
+`automations.yaml` now uses a catch-all Assist sentence trigger:
 
-- `analyze bedroom`
-- `check bedroom`
-- `Tony {command}`
-- `bedroom agent {command}`
-- `{command} in the bedroom`
+- `{command}`
+
+This means every Assist utterance is forwarded to `POST /agent/chat`, where the
+bedroom-agent LLM chooses the high-level route.
 
 The automation expects `/agent/chat` to return either:
 

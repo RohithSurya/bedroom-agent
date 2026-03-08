@@ -16,8 +16,8 @@ sequenceDiagram
   participant Tool as HA tool client
   participant HAApi as HA service API
 
-  User->>Assist: "Tony start focus mode"
-  Assist->>Auto: matched conversation trigger
+  User->>Assist: "Start focus mode"
+  Assist->>Auto: matched catch-all conversation trigger
   Auto->>API: POST /agent/chat
   API->>State: build_runtime_state()
   State-->>API: runtime state

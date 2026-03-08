@@ -4,15 +4,8 @@
   triggers:
     - trigger: conversation
       command:
-        - "analyze bedroom"
-        - "analyze my bedroom"
-        - "check bedroom"
-        - "check my bedroom"
-        - "Tony {command}"
-        - "Tony ask bedroom agent to {command}"
-        - "bedroom agent {command}"
-        - "ask bedroom agent to {command}"
-        - "{command} in the bedroom"
+        # Catch every Assist utterance and let the bedroom-agent LLM route it.
+        - "{command}"
   actions:
     - action: rest_command.bedroom_agent_chat
       continue_on_error: true

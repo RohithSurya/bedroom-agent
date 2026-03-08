@@ -460,8 +460,8 @@ sequenceDiagram
   participant Tool as HA tool client
   participant HAApi as HA service API
 
-  User->>Assist: "Tony start focus mode"
-  Assist->>Auto: matched conversation trigger
+  User->>Assist: "Start focus mode"
+  Assist->>Auto: matched catch-all conversation trigger
   Auto->>API: POST /agent/chat
   API->>State: build_runtime_state()
   State-->>API: runtime state
@@ -626,15 +626,17 @@ For a full list, see `apps/bedroom-agent/src/core/config.py`.
 Home Assistant configuration lives under `infra/home-automation/ha_config`.
 
 - `configuration.yaml` defines `rest_command` calls into the agent
-- `automations.yaml` maps Assist conversation phrases to `/agent/chat`
+- `automations.yaml` routes every Assist utterance to `/agent/chat`
 - `scripts.yaml` exposes helper scripts such as `agent_chat_request` and `bedroom_agent_speak`
 
-The current voice entrypoint supports phrases such as:
+The current voice entrypoint is a catch-all Assist trigger, so prompts like these all go through the agent LLM:
 
-- `Tony start focus mode`
-- `bedroom agent cool the room`
+- `start focus mode`
+- `cool the room`
 - `analyze bedroom`
 - `check my bedroom`
+
+This will also shadow normal built-in Assist intent handling unless you narrow the trigger again.
 
 If you change `configuration.yaml`, restart Home Assistant. If you only change automations or scripts, a reload is usually enough.
 
