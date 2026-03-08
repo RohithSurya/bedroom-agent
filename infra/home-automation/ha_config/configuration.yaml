@@ -39,12 +39,16 @@ template:
   - fan:
       - name: "Bedroom Fan"
         unique_id: bedroom_fan_agent
-        # Use the real plug state for display (or keep it optimistic if you prefer)
+        # Expose the bedroom fan as a fan entity backed by the plug state.
         state: "{{ is_state('switch.bedroom_fan_plug', 'on') }}"
         turn_on:
-          service: script.agent_fan_on_request
+          service: switch.turn_on
+          target:
+            entity_id: switch.bedroom_fan_plug
         turn_off:
-          service: script.agent_fan_off_request
+          service: switch.turn_off
+          target:
+            entity_id: switch.bedroom_fan_plug
 
 
 

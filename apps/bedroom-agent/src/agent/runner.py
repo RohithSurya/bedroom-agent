@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 import random
 import time
+from agent.tool_behaviors import ToolBehaviorRegistry
 from reliability.retry import RetryPolicy
 
 from contracts.ha import ToolCall, ToolResult
@@ -28,6 +29,7 @@ class Runner:
     retry_attempts: int = 1  # v0 default
     tool_retry_policy: RetryPolicy = field(default_factory=lambda: RetryPolicy(max_attempts=1))
     tool_timeout_s: float = 8.0  # extra safety, especially for HTTP/HA
+    behavior_registry: ToolBehaviorRegistry = field(default_factory=ToolBehaviorRegistry)
     ha_breaker: CircuitBreaker = field(
         default_factory=lambda: CircuitBreaker(failure_threshold=3, recovery_timeout_s=10.0)
     )
@@ -35,9 +37,11 @@ class Runner:
     def read_entity_state(self, entity_id: str) -> dict[str, Any]:
         return self._read_entity_state(entity_id)
 
+    def _behavior_for(self, call: ToolCall):
+        return self.behavior_registry.for_call(call)
+
     def _is_retryable_tool(self, call: ToolCall) -> bool:
-        # Don't retry speech (can double-speak). Most HA state-setting tools are idempotent.
-        return call.tool != "tts.say"
+        return self._behavior_for(call).is_retryable(call)
 
     def _log_breaker_transition(
         self, correlation_id: str, before: str, after: str, *, tool: str
@@ -142,6 +146,13 @@ class Runner:
         # Local backend (ToolExecutor)
         s = self.executor.get_state()
 
+        if entity_id.startswith("fan."):
+            return {
+                "entity_id": entity_id,
+                "state": s.get("fans", {}).get(entity_id, {}).get("state", "unknown"),
+                "attributes": {},
+            }
+
         if entity_id.startswith("switch."):
             return {
                 "entity_id": entity_id,
@@ -175,106 +186,7 @@ class Runner:
         return {"entity_id": entity_id, "state": "unknown", "attributes": {}}
 
     def _verify(self, call: ToolCall, result: ToolResult) -> dict[str, Any]:
-        mode = getattr(self.executor, "mode", "active")
-        if mode == "shadow":
-            return {
-                "verified": bool(result.ok),
-                "mode": "shadow",
-                "note": "state verification skipped",
-            }
-
-        # if call.tool == "light.set":
-        #     entity_id = str(call.args.get("entity_id", "switch.bedroom_light_switch"))
-
-        #     ent = self._read_entity_state(entity_id)
-        #     attrs = ent.get("attributes", {}) or {}
-
-        #     got_pct = None
-
-        #     # HA: attributes.brightness is 0-255
-        #     if "brightness" in attrs and attrs["brightness"] is not None:
-        #         try:
-        #             got_pct = round((int(attrs["brightness"]) * 100) / 255)
-        #         except Exception:
-        #             got_pct = None
-
-        #     # Local mock: may store brightness_pct directly
-        #     if got_pct is None and "brightness_pct" in attrs:
-        #         try:
-        #             got_pct = int(attrs["brightness_pct"])
-        #         except Exception:
-        #             got_pct = None
-
-        #     verified = bool(result.ok) and (got_pct is not None) and (abs(got_pct - want_pct) <= 2)
-        #     return {
-        #         "verified": verified,
-        #         "entity_id": entity_id,
-        #         "raw_state": ent.get("state"),
-        #     }
-
-        if call.tool == "switch.set":
-            entity_id = str(call.args.get("entity_id", "switch.bedroom_fan_plug"))
-            want = str(call.args.get("state", "")).lower()
-
-            ent = self._read_entity_state(entity_id)
-            got = str(ent.get("state", "")).lower()
-
-            verified = bool(result.ok) and (got == want)
-            return {"verified": verified, "entity_id": entity_id, "want": want, "got": got}
-
-        if call.tool == "tts.say":
-            msg = str(call.args.get("message", ""))
-
-            # Local ToolExecutor tracks tts list
-            if not hasattr(self.executor, "read_entity_state"):
-                state = self.executor.get_state()
-                tts = state.get("tts", [])
-                verified = bool(result.ok) and (len(tts) > 0) and (tts[-1] == msg)
-                return {"verified": verified, "message": msg}
-
-            # Real HA backend: unless you wire TTS to a verifiable entity, treat as best-effort
-            return {
-                "verified": bool(result.ok),
-                "message": msg,
-                "note": "no_state_verifier_for_tts_backend",
-            }
-
-        if call.tool == "climate.set_mode":
-            entity_id = str(call.args.get("entity_id", "climate.bedroom_ac"))
-            want = str(call.args.get("hvac_mode", "")).lower()
-            ent = self._read_entity_state(entity_id)
-            attrs = ent.get("attributes", {}) or {}
-            got = str(attrs.get("hvac_mode", ent.get("state", ""))).lower()
-            verified = bool(result.ok) and got == want
-            return {"verified": verified, "entity_id": entity_id, "want": want, "got": got}
-
-        if call.tool == "climate.set_temperature":
-            entity_id = str(call.args.get("entity_id", "climate.bedroom_ac"))
-            want = call.args.get("temperature")
-            ent = self._read_entity_state(entity_id)
-            attrs = ent.get("attributes", {}) or {}
-            got = attrs.get("temperature")
-            verified = bool(result.ok) and got == want
-            return {"verified": verified, "entity_id": entity_id, "want": want, "got": got}
-
-        if call.tool == "climate.set_fan_mode":
-            entity_id = str(call.args.get("entity_id", "climate.bedroom_ac"))
-            want = str(call.args.get("fan_mode", "")).lower()
-            ent = self._read_entity_state(entity_id)
-            attrs = ent.get("attributes", {}) or {}
-            got = str(attrs.get("fan_mode", "")).lower()
-            verified = bool(result.ok) and got == want
-            return {"verified": verified, "entity_id": entity_id, "want": want, "got": got}
-
-        return {"verified": bool(result.ok), "note": "no verifier for tool"}
-
-    def _is_lighting_call(self, call: ToolCall) -> bool:
-        if call.tool == "light.set":
-            return True
-        if call.tool != "switch.set":
-            return False
-        entity_id = str(call.args.get("entity_id", "")).lower()
-        return "light" in entity_id or "lamp" in entity_id
+        return self._behavior_for(call).verify(self, call, result)
 
     def execute_actions(
         self,
@@ -295,6 +207,8 @@ class Runner:
         light_ok = True
 
         for call in actions:
+            behavior = self._behavior_for(call)
+
             # Skip "success" TTS if lights already failed (we'll speak fallback later)
             if call.tool == "tts.say":
                 msg = str(call.args.get("message", ""))
@@ -328,7 +242,7 @@ class Runner:
                     }
                 )
 
-            if self._is_lighting_call(call):
+            if behavior.is_verification_critical(call):
                 attempts_left = self.retry_attempts
                 while attempts_left > 0 and (not verify.get("verified", False)):
                     attempts_left -= 1

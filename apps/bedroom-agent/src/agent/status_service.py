@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
-
+import time
+from datetime import datetime
 from llm.base import LLMClient
 from memory.sqlite_kv import SqliteKV
 
@@ -28,7 +28,6 @@ QUERY_ROOM_STATUS = "room_status"
 
 QUERY_EVENT_PRIORITIES: dict[str, list[str]] = {
     QUERY_WHY_LIGHT_ON: [
-        "enter_room_skipped_quiet_hours_switch",
         "enter_room_skipped_already_on",
         "enter_detected",
         "door_update",
@@ -52,17 +51,6 @@ QUERY_EVENT_PRIORITIES: dict[str, list[str]] = {
 }
 
 WHY_LIGHT_ON_RULES: list[tuple[str, dict[str, Any]]] = [
-    (
-        "enter_room_skipped_quiet_hours_switch",
-        {
-            "answer": (
-                "The agent detected entry, but skipped turning the switch on "
-                "because it was quiet hours."
-            ),
-            "reasoning_tags": ["enter_detected", "quiet_hours", "switch_skip"],
-            "confidence": 0.99,
-        },
-    ),
     (
         "enter_room_skipped_already_on",
         {
@@ -105,21 +93,23 @@ class StatusService:
     llm: Optional[LLMClient]
     tz_name: str
 
-    def handle_query(self, query: str) -> dict[str, Any]:
+    def handle_query(self, query: str, runtime_state: dict[str, Any] | None = None) -> dict[str, Any]:
         query = (query or "What is the room status?").strip()
         query_type = self._classify(query)
         beliefs = self.kv.get_namespace("belief")
         prefs = self.kv.get_namespace("prefs")
         recent_events = self.kv.recent_events(limit=40)
         relevant_events = self._select_events_for_query(query_type, recent_events)
+        live_status = self._live_status_context(runtime_state)
         context = {
             "query_type": query_type,
             "beliefs": beliefs,
             "prefs": prefs,
+            "live_status": live_status,
             "recent_events": [self._serialize_event(evt) for evt in relevant_events],
         }
 
-        fallback = self._fallback_answer(query_type, beliefs, prefs, relevant_events)
+        fallback = self._fallback_answer(query_type, beliefs, prefs, relevant_events, live_status)
         structured = fallback
         if query_type not in {QUERY_WHY_LIGHT_ON, QUERY_WHY_LIGHT_OFF}:
             structured = self._llm_answer(query=query, context=context, fallback=fallback)
@@ -129,6 +119,7 @@ class StatusService:
             "structured": {
                 "query_type": query_type,
                 "beliefs": beliefs,
+                "live_status": live_status,
                 "recent_events": context["recent_events"],
                 "reasoning_tags": structured["reasoning_tags"],
                 "confidence": structured["confidence"],
@@ -154,7 +145,11 @@ class StatusService:
             "Return JSON with answer, reasoning_tags, confidence."
         )
         try:
+            print(f"LLM prompt: {prompt}")
+            t_0 = time.perf_counter()
             out = self.llm.generate_json(prompt=prompt, schema=STATUS_SCHEMA, temperature=0.1)
+            t_json = time.perf_counter()
+            print(f"LLM raw output: {out} (prompt took {t_json - t_0:.2f}s)")
         except Exception:
             return fallback
 
@@ -189,6 +184,7 @@ class StatusService:
         beliefs: dict[str, Any],
         prefs: dict[str, Any],
         recent_events: list[dict[str, Any]],
+        live_status: dict[str, Any],
     ) -> dict[str, Any]:
         if query_type == QUERY_WHY_LIGHT_ON:
             return self._fallback_why_on(recent_events)
@@ -196,7 +192,7 @@ class StatusService:
             return self._fallback_why_off(recent_events)
         if query_type == QUERY_RECENT_EVENTS:
             return self._fallback_recent(recent_events)
-        return self._fallback_status(beliefs, prefs, recent_events)
+        return self._fallback_status(beliefs, prefs, recent_events, live_status)
 
     def _fallback_why_on(self, recent_events: list[dict[str, Any]]) -> dict[str, Any]:
         event_types = {event["type"] for event in recent_events}
@@ -256,6 +252,7 @@ class StatusService:
         beliefs: dict[str, Any],
         prefs: dict[str, Any],
         recent_events: list[dict[str, Any]],
+        live_status: dict[str, Any],
     ) -> dict[str, Any]:
         presence = "present" if beliefs.get("presence") else "not present"
         door = "open" if beliefs.get("door_open") else "closed"
@@ -270,14 +267,65 @@ class StatusService:
         recent_part = ""
         if recent_events:
             recent_part = f" Most recent event: {self._humanize_event(recent_events[0])}."
+        device_part = self._format_live_status(live_status)
         return {
             "answer": (
                 f"Current bedroom status: presence is {presence}, the door belief is {door}, "
-                f"and guest mode is {guest_mode}.{recent_part}{analysis_part}"
+                f"and guest mode is {guest_mode}.{device_part}{recent_part}{analysis_part}"
             ).strip(),
-            "reasoning_tags": ["presence", "door_open", "guest_mode", "recent_events"],
+            "reasoning_tags": ["presence", "door_open", "guest_mode", "live_status", "recent_events"],
             "confidence": 0.9,
         }
+
+    def _live_status_context(self, runtime_state: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(runtime_state, dict):
+            return {}
+
+        keys = [
+            "light_entity_id",
+            "light_state",
+            "bedroom_lamp_entity_id",
+            "bedroom_lamp_state",
+            "fan_entity_id",
+            "fan_state",
+            "ac_entity_id",
+            "ac_available",
+            "ac_state",
+            "ac_hvac_mode",
+            "ac_target_temp_c",
+            "ac_fan_mode",
+            "temperature_c",
+            "humidity_pct",
+        ]
+        return {key: runtime_state.get(key) for key in keys if key in runtime_state}
+
+    def _format_live_status(self, live_status: dict[str, Any]) -> str:
+        if not live_status:
+            return ""
+
+        parts: list[str] = []
+        light_state = live_status.get("light_state")
+        if light_state:
+            parts.append(f"the bedroom light is {light_state}")
+
+        lamp_state = live_status.get("bedroom_lamp_state")
+        if lamp_state:
+            parts.append(f"the bed lamp is {lamp_state}")
+
+        fan_state = live_status.get("fan_state")
+        if fan_state:
+            parts.append(f"the fan is {fan_state}")
+
+        ac_available = live_status.get("ac_available")
+        ac_mode = live_status.get("ac_hvac_mode") or live_status.get("ac_state")
+        if ac_available is False:
+            parts.append("the AC is unavailable")
+        elif ac_mode:
+            parts.append(f"the AC is {ac_mode}")
+
+        if not parts:
+            return ""
+        return " Live device state: " + ", ".join(parts) + "."
 
     def _serialize_event(self, event: dict[str, Any]) -> dict[str, Any]:
         return {

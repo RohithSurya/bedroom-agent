@@ -9,7 +9,7 @@ steps:
   - request:
       intent: fan_on
       args:
-        entity_id: switch.bedroom_fan_plug
+        entity_id: fan.bedroom_fan
     expect:
       decision: allow
       final_success: true
@@ -17,9 +17,9 @@ steps:
   - request:
       intent: fan_on
       args:
-        entity_id: switch.bedroom_fan_plug
+        entity_id: fan.bedroom_fan
     expect:
       decision: deny
       reason_contains: cooldown_active
-      not_action_tools: [switch.set]
+      not_action_tools: [fan.set]
       final_success: true

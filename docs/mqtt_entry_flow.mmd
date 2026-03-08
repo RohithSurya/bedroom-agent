@@ -4,8 +4,12 @@ sequenceDiagram
   participant Broker as MQTT broker
   participant Listener as Z2MMqttListener
   participant DB as SQLite
+  participant App as AgentAppState callback
   participant Orch as Orchestrator
+  participant Factory as ActionFactory
   participant Run as Runner
+  participant Registry as ToolBehaviorRegistry
+  participant Tool as HA tool client
   participant HA as Home Assistant API
 
   Door->>Broker: contact=false
@@ -21,14 +25,25 @@ sequenceDiagram
 
   alt within ENTRY_WINDOW_S and not on cooldown
     Listener->>DB: append enter_detected
-    Listener->>Orch: on_enter callback
-    Orch-->>Run: light-on plan
-    Run->>HA: turn on light / switch
+    Listener->>App: on_enter callback
+    App->>Orch: handle_request(enter_room)
+    Orch->>Factory: build LightAction
+    Factory-->>Orch: typed action
+    Orch-->>App: light-on ToolCall plan
+    App->>Run: execute_actions(plan)
+    Run->>Registry: for_call(light.set)
+    Registry-->>Run: LightSetBehavior
+    Run->>Tool: execute(light.set)
+    Tool->>HA: turn on light
   else presence becomes false
     Listener->>DB: start vacancy timer
     Note over Listener: after VACANCY_OFF_DELAY_S
     Listener->>DB: append vacancy_detected
-    Listener->>Run: on_vacant callback
-    Run->>HA: turn off light / switch
+    Listener->>App: on_vacant callback
+    App->>Run: execute_actions([light.set off])
+    Run->>Registry: for_call(light.set)
+    Registry-->>Run: LightSetBehavior
+    Run->>Tool: execute(light.set)
+    Tool->>HA: turn off light
     Listener->>DB: append vacancy_off_executed
   end

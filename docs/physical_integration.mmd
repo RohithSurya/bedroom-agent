@@ -7,8 +7,8 @@ flowchart LR
     Presence["mmWave presence sensor\nZigbee"]
     Door["Bedroom door sensor\nZigbee"]
     TempHum["Temp / humidity sensor\nHA entity"]
-    FanPlug["Bedroom fan plug\nswitch.bedroom_fan_plug"]
-    LightSwitch["Bedroom light switch\nswitch.bedroom_light_switch"]
+    Fan["Bedroom fan\nfan.bedroom_fan"]
+    LightSwitch["Bedroom light\nlight.bedroom_light"]
     AC["Vissani window AC"]
   end
 
@@ -30,7 +30,7 @@ flowchart LR
   Presence -->|Zigbee telemetry| ZBT2
   Door -->|Zigbee telemetry| ZBT2
   TempHum -->|sensor state| HA
-  FanPlug <-->|Zigbee switch control| ZBT2
+  Fan <-->|Zigbee control via fan entity| ZBT2
   LightSwitch <-->|Zigbee switch control| ZBT2
 
   ZBT2 --> Z2M

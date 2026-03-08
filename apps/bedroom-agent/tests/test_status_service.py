@@ -39,6 +39,32 @@ def test_status_service_summarizes_room_status(tmp_path):
     assert out["structured"]["beliefs"]["presence"] is False
 
 
+def test_status_service_includes_live_light_status_in_room_query(tmp_path):
+    kv = SqliteKV(str(tmp_path / "memory.sqlite"))
+    kv.set("belief", "presence", True)
+    kv.set("belief", "door_open", False)
+    kv.set("prefs", "guest_mode", False)
+
+    service = StatusService(kv=kv, llm=None, tz_name="America/New_York")
+    out = service.handle_query(
+        "Is the bedroom light on?",
+        runtime_state={
+            "light_entity_id": "light.bedroom_light",
+            "light_state": "on",
+            "bedroom_lamp_entity_id": "light.bedlamp",
+            "bedroom_lamp_state": "off",
+            "fan_entity_id": "fan.bedroom_fan",
+            "fan_state": "off",
+            "ac_entity_id": "climate.bedroom_ac",
+            "ac_available": True,
+            "ac_hvac_mode": "cool",
+        },
+    )
+
+    assert "bedroom light is on" in out["summary"].lower()
+    assert out["structured"]["live_status"]["light_state"] == "on"
+
+
 def test_status_service_filters_presence_spam_for_why_light_on(tmp_path):
     kv = SqliteKV(str(tmp_path / "memory.sqlite"))
     kv.append_event("presence_update", {"presence": True, "topic": "presence", "target_distance": 1.2})

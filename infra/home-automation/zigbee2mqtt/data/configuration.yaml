@@ -25,3 +25,7 @@ devices:
     friendly_name: bedroom_light_switch
   '0xa4c1380e72596998':
     friendly_name: temp_humidity_sensor
+  '0xffffb40e060767e6':
+    friendly_name: humidifier_plug
+  '0xffffb40e0607569f':
+    friendly_name: bedlamp_plug

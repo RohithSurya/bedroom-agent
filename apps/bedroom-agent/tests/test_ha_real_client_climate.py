@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from contracts.ha import ToolCall
 from core.logging_jsonl import JsonlLogger
 from tools.ha_real_client import HAToolClientReal
-from contracts.ha import ToolCall
 
 
 class DummyResponse:
@@ -14,19 +14,23 @@ class DummyResponse:
         return {"ok": True}
 
 
-def test_ha_real_client_maps_climate_tools(monkeypatch, tmp_path):
-    calls: list[tuple[str, dict]] = []
+class DummySession:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
 
-    def fake_post(url, headers=None, json=None, timeout=None):
-        calls.append((url, json))
+    def post(self, url, headers=None, json=None, timeout=None):
+        self.calls.append((url, json))
         return DummyResponse()
 
-    monkeypatch.setattr("tools.ha_real_client.requests.post", fake_post)
+
+def test_ha_real_client_maps_climate_tools(tmp_path):
+    session = DummySession()
 
     client = HAToolClientReal(
         base_url="http://ha.local",
         token="token",
         logger=JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York"),
+        session=session,
     )
 
     mode_result = client.execute(
@@ -57,6 +61,39 @@ def test_ha_real_client_maps_climate_tools(monkeypatch, tmp_path):
     assert mode_result.ok is True
     assert temp_result.ok is True
     assert fan_result.ok is True
-    assert calls[0][0].endswith("/api/services/climate/set_hvac_mode")
-    assert calls[1][0].endswith("/api/services/climate/set_temperature")
-    assert calls[2][0].endswith("/api/services/climate/set_fan_mode")
+    assert session.calls[0][0].endswith("/api/services/climate/set_hvac_mode")
+    assert session.calls[1][0].endswith("/api/services/climate/set_temperature")
+    assert session.calls[2][0].endswith("/api/services/climate/set_fan_mode")
+
+
+def test_ha_real_client_maps_fan_tool(tmp_path):
+    session = DummySession()
+
+    client = HAToolClientReal(
+        base_url="http://ha.local",
+        token="token",
+        logger=JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York"),
+        session=session,
+    )
+
+    on_result = client.execute(
+        ToolCall(
+            tool="fan.set",
+            args={"entity_id": "fan.bedroom_fan", "state": "on"},
+            idempotency_key="fan-on",
+            correlation_id="cid",
+        )
+    )
+    off_result = client.execute(
+        ToolCall(
+            tool="fan.set",
+            args={"entity_id": "fan.bedroom_fan", "state": "off"},
+            idempotency_key="fan-off",
+            correlation_id="cid",
+        )
+    )
+
+    assert on_result.ok is True
+    assert off_result.ok is True
+    assert session.calls[0][0].endswith("/api/services/fan/turn_on")
+    assert session.calls[1][0].endswith("/api/services/fan/turn_off")

@@ -10,7 +10,7 @@ def test_injected_failure_is_transient_and_not_cached_by_default():
 
     call = ToolCall(
         tool="light.set",
-        args={"entity_id": "light.bedroom_lamp", "brightness_pct": 11, "transition_s": 0},
+        args={"entity_id": "light.bedlamp", "brightness_pct": 11, "transition_s": 0},
         idempotency_key="same-key",
         correlation_id="c1",
     )
@@ -23,5 +23,5 @@ def test_injected_failure_is_transient_and_not_cached_by_default():
     # same idempotency key should execute again (since failure wasn't cached)
     r2 = ex.execute(call)
     assert r2.ok is True
-    assert ex.device_state["lights"]["light.bedroom_lamp"]["brightness_pct"] == 11
+    assert ex.device_state["lights"]["light.bedlamp"]["brightness_pct"] == 11
     assert ex.executions == 2

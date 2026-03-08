@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.actions import ActionFactory, AgentAction
 from contracts.ha import ToolCall
 from contracts.policy import PolicyDecision
-from core.ids import new_correlation_id, new_idempotency_key
+from core.ids import new_correlation_id
 from agent.policies import (
     evaluate_comfort_adjust,
     evaluate_enter_room,
@@ -20,6 +21,7 @@ from core.cooldowns import CooldownStore
 class Orchestrator:
     def __init__(self, cooldowns: CooldownStore | None = None) -> None:
         self.cooldowns = cooldowns or CooldownStore()
+        self.action_factory = ActionFactory()
 
     def handle_request(
         self, *, intent: str, args: dict[str, Any], state: dict[str, Any]
@@ -43,7 +45,7 @@ class Orchestrator:
             cooldown_key = f"intent:{intent}:room:bedroom"
             decision = evaluate_night_mode(state)
             cooldown_seconds = decision.cooldown_seconds
-            actions: list[ToolCall] = []
+            actions: list[AgentAction] = []
 
             if decision.decision == "allow" and cooldown_seconds > 0:
                 allowed, remaining = self.cooldowns.can_run(cooldown_key, cooldown_seconds)
@@ -56,35 +58,24 @@ class Orchestrator:
                     )
 
             if decision.decision == "allow":
-                entity_id = args.get("entity_id") or state.get("light_entity_id", "switch.bedroom_light_switch")
-
+                entity_id = self._resolve_light_entity_id(args=args, state=state)
                 actions.append(
-                    self._light_call(cid, entity_id=entity_id, state="off")
+                    self.action_factory.light(entity_id=entity_id, state="off")
                 )
                 actions.append(
-                    ToolCall(
-                        tool="tts.say",
-                        args={"message": "Night mode on. Lights dimmed."},
-                        idempotency_key=new_idempotency_key(),
-                        correlation_id=cid,
-                    )
+                    self.action_factory.speech(message="Night mode on. Lights dimmed.")
                 )
             else:
                 actions.append(
-                    ToolCall(
-                        tool="tts.say",
-                        args={
-                            "message": f"Night mode blocked: {_humanize_reason(decision.reason)}"
-                        },
-                        idempotency_key=new_idempotency_key(),
-                        correlation_id=cid,
+                    self.action_factory.speech(
+                        message=f"Night mode blocked: {_humanize_reason(decision.reason)}"
                     )
                 )
 
             return {
                 "correlation_id": cid,
                 "decision": decision,
-                "actions": actions,
+                "actions": self._materialize_actions(cid, actions),
                 "cooldown_seconds": cooldown_seconds,
                 "cooldown_key": cooldown_key,
             }
@@ -92,9 +83,9 @@ class Orchestrator:
         # ---------- fan_on / fan_off ----------
         if intent in ("fan_on", "fan_off"):
             decision = evaluate_fan_power(state)
-            actions: list[ToolCall] = []
+            actions: list[AgentAction] = []
 
-            entity_id = args.get("entity_id") or state.get("fan_entity_id", "switch.bedroom_fan_plug")
+            entity_id = args.get("entity_id") or state.get("fan_entity_id", "fan.bedroom_fan")
             desired = "on" if intent == "fan_on" else "off"
 
             cooldown_key = f"intent:fan_power:entity:{entity_id}"
@@ -111,36 +102,21 @@ class Orchestrator:
                     )
 
             if decision.decision == "allow":
+                actions.append(self.action_factory.fan(entity_id=entity_id, state=desired))
                 actions.append(
-                    ToolCall(
-                        tool="switch.set",
-                        args={"entity_id": entity_id, "state": desired},
-                        idempotency_key=new_idempotency_key(),
-                        correlation_id=cid,
-                    )
-                )
-                actions.append(
-                    ToolCall(
-                        tool="tts.say",
-                        args={"message": f"Fan {desired}."},
-                        idempotency_key=new_idempotency_key(),
-                        correlation_id=cid,
-                    )
+                    self.action_factory.speech(message=f"Fan {desired}.")
                 )
             else:
                 actions.append(
-                    ToolCall(
-                        tool="tts.say",
-                        args={"message": f"Fan blocked: {_humanize_reason(decision.reason)}"},
-                        idempotency_key=new_idempotency_key(),
-                        correlation_id=cid,
+                    self.action_factory.speech(
+                        message=f"Fan blocked: {_humanize_reason(decision.reason)}"
                     )
                 )
 
             return {
                 "correlation_id": cid,
                 "decision": decision,
-                "actions": actions,
+                "actions": self._materialize_actions(cid, actions),
                 "cooldown_key": cooldown_key,
                 "cooldown_seconds": cooldown_seconds,
             }
@@ -148,9 +124,9 @@ class Orchestrator:
         # ---------- enter_room ----------
         if intent == "enter_room":
             decision = evaluate_enter_room(state)
-            actions: list[ToolCall] = []
+            actions: list[AgentAction] = []
 
-            entity_id = args.get("entity_id") or state.get("light_entity_id", "switch.bedroom_light_switch")
+            entity_id = self._resolve_light_entity_id(args=args, state=state)
 
             cooldown_key = "intent:enter_room:room:bedroom"
             cooldown_seconds = decision.cooldown_seconds
@@ -166,12 +142,12 @@ class Orchestrator:
                     )
 
             if decision.decision == "allow":
-                actions.append(self._light_call(cid, entity_id=entity_id, state="on"))
+                actions.append(self.action_factory.light(entity_id=entity_id, state="on"))
 
             return {
                 "correlation_id": cid,
                 "decision": decision,
-                "actions": actions,
+                "actions": self._materialize_actions(cid, actions),
                 "cooldown_key": cooldown_key,
                 "cooldown_seconds": cooldown_seconds,
             }
@@ -192,18 +168,11 @@ class Orchestrator:
         decision = PolicyDecision(
             decision="deny", reason=f"unknown_intent:{intent}", cooldown_seconds=0, safety_checks=[]
         )
-        actions = [
-            ToolCall(
-                tool="tts.say",
-                args={"message": f"Blocked: {_humanize_reason(decision.reason)}"},
-                idempotency_key=new_idempotency_key(),
-                correlation_id=cid,
-            )
-        ]
+        actions = [self.action_factory.speech(message=f"Blocked: {_humanize_reason(decision.reason)}")]
         return {
             "correlation_id": cid,
             "decision": decision,
-            "actions": actions,
+            "actions": self._materialize_actions(cid, actions),
             "cooldown_key": None,
             "cooldown_seconds": 0,
         }
@@ -214,7 +183,7 @@ class Orchestrator:
         decision = evaluate_sleep_mode(state)
         cooldown_key = "intent:sleep_mode:room:bedroom"
         cooldown_seconds = decision.cooldown_seconds
-        actions: list[ToolCall] = []
+        actions: list[AgentAction] = []
 
         decision = self._apply_cooldown(
             cooldown_key=cooldown_key,
@@ -222,35 +191,28 @@ class Orchestrator:
             decision=decision,
         )
         if decision.decision == "allow":
-            light_entity_id = args.get("light_entity_id") or state.get(
-                "light_entity_id", "switch.bedroom_light_switch"
-            )
+            light_entity_id = self._resolve_light_entity_id(args=args, state=state)
             if str(state.get("light_state", "")).lower() != "off":
-                actions.append(self._light_call(cid, entity_id=light_entity_id, state="off"))
+                actions.append(self.action_factory.light(entity_id=light_entity_id, state="off"))
 
-            if bool(state.get("sleep_mode_enable_climate")) and bool(state.get("room_uncomfortable")) and bool(
-                state.get("ac_available")
+            if (
+                bool(state.get("sleep_mode_enable_climate"))
+                and bool(state.get("room_uncomfortable"))
+                and bool(state.get("ac_available"))
             ):
-                actions.extend(
-                    self._cooling_actions(
-                        cid,
+                actions.append(
+                    self.action_factory.climate(
                         entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
+                        hvac_mode="cool",
                         temperature=int(state.get("sleep_target_temp_c", 24)),
                         fan_mode="low",
                     )
                 )
-            actions.append(
-                ToolCall(
-                    tool="tts.say",
-                    args={"message": "Sleep mode on."},
-                    idempotency_key=new_idempotency_key(),
-                    correlation_id=cid,
-                )
-            )
+            actions.append(self.action_factory.speech(message="Sleep mode on."))
         return {
             "correlation_id": cid,
             "decision": decision,
-            "actions": actions,
+            "actions": self._materialize_actions(cid, actions),
             "cooldown_key": cooldown_key,
             "cooldown_seconds": cooldown_seconds,
         }
@@ -261,7 +223,7 @@ class Orchestrator:
         decision = evaluate_focus_start(state)
         cooldown_key = "intent:focus_start:room:bedroom"
         cooldown_seconds = decision.cooldown_seconds
-        actions: list[ToolCall] = []
+        actions: list[AgentAction] = []
 
         decision = self._apply_cooldown(
             cooldown_key=cooldown_key,
@@ -269,46 +231,34 @@ class Orchestrator:
             decision=decision,
         )
         if decision.decision == "allow":
-            light_entity_id = args.get("light_entity_id") or state.get(
-                "light_entity_id", "switch.bedroom_light_switch"
-            )
+            light_entity_id = self._resolve_light_entity_id(args=args, state=state)
             if str(state.get("light_state", "")).lower() != "on":
-                actions.append(self._light_call(cid, entity_id=light_entity_id, state="on"))
+                actions.append(self.action_factory.light(entity_id=light_entity_id, state="on"))
 
             if bool(state.get("room_uncomfortable")):
                 if bool(state.get("focus_mode_enable_climate")) and bool(state.get("ac_available")):
-                    actions.extend(
-                        self._cooling_actions(
-                            cid,
+                    actions.append(
+                        self.action_factory.climate(
                             entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
+                            hvac_mode="cool",
                             temperature=int(state.get("comfort_target_temp_c", 24)),
                             fan_mode="auto",
                         )
                     )
-                elif bool(state.get("focus_mode_enable_fan")) and bool(state.get("comfort_use_fan_fallback")):
+                elif bool(state.get("focus_mode_enable_fan")) and bool(
+                    state.get("comfort_use_fan_fallback")
+                ):
                     actions.append(
-                        ToolCall(
-                            tool="switch.set",
-                            args={
-                                "entity_id": str(state.get("fan_entity_id", "switch.bedroom_fan_plug")),
-                                "state": "on",
-                            },
-                            idempotency_key=new_idempotency_key(),
-                            correlation_id=cid,
+                        self.action_factory.fan(
+                            entity_id=str(state.get("fan_entity_id", "fan.bedroom_fan")),
+                            state="on",
                         )
                     )
-            actions.append(
-                ToolCall(
-                    tool="tts.say",
-                    args={"message": "Focus mode on."},
-                    idempotency_key=new_idempotency_key(),
-                    correlation_id=cid,
-                )
-            )
+            actions.append(self.action_factory.speech(message="Focus mode on."))
         return {
             "correlation_id": cid,
             "decision": decision,
-            "actions": actions,
+            "actions": self._materialize_actions(cid, actions),
             "cooldown_key": cooldown_key,
             "cooldown_seconds": cooldown_seconds,
         }
@@ -319,7 +269,7 @@ class Orchestrator:
         decision = evaluate_focus_end(state)
         cooldown_key = "intent:focus_end:room:bedroom"
         cooldown_seconds = decision.cooldown_seconds
-        actions: list[ToolCall] = []
+        actions: list[AgentAction] = []
 
         decision = self._apply_cooldown(
             cooldown_key=cooldown_key,
@@ -327,18 +277,11 @@ class Orchestrator:
             decision=decision,
         )
         if decision.decision == "allow":
-            actions.append(
-                ToolCall(
-                    tool="tts.say",
-                    args={"message": "Focus mode off."},
-                    idempotency_key=new_idempotency_key(),
-                    correlation_id=cid,
-                )
-            )
+            actions.append(self.action_factory.speech(message="Focus mode off."))
         return {
             "correlation_id": cid,
             "decision": decision,
-            "actions": actions,
+            "actions": self._materialize_actions(cid, actions),
             "cooldown_key": cooldown_key,
             "cooldown_seconds": cooldown_seconds,
         }
@@ -349,7 +292,7 @@ class Orchestrator:
         decision = evaluate_comfort_adjust(state)
         cooldown_key = "intent:comfort_adjust:room:bedroom"
         cooldown_seconds = decision.cooldown_seconds
-        actions: list[ToolCall] = []
+        actions: list[AgentAction] = []
 
         decision = self._apply_cooldown(
             cooldown_key=cooldown_key,
@@ -360,24 +303,19 @@ class Orchestrator:
         if decision.decision == "allow":
             if bool(state.get("room_uncomfortable")):
                 if bool(state.get("ac_available")):
-                    actions.extend(
-                        self._cooling_actions(
-                            cid,
+                    actions.append(
+                        self.action_factory.climate(
                             entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
+                            hvac_mode="cool",
                             temperature=int(state.get("comfort_target_temp_c", 24)),
                             fan_mode="auto",
                         )
                     )
                 elif bool(state.get("comfort_use_fan_fallback")):
                     actions.append(
-                        ToolCall(
-                            tool="switch.set",
-                            args={
-                                "entity_id": str(state.get("fan_entity_id", "switch.bedroom_fan_plug")),
-                                "state": "on",
-                            },
-                            idempotency_key=new_idempotency_key(),
-                            correlation_id=cid,
+                        self.action_factory.fan(
+                            entity_id=str(state.get("fan_entity_id", "fan.bedroom_fan")),
+                            state="on",
                         )
                     )
             else:
@@ -392,7 +330,7 @@ class Orchestrator:
         return {
             "correlation_id": cid,
             "decision": decision,
-            "actions": actions,
+            "actions": self._materialize_actions(cid, actions),
             "cooldown_key": cooldown_key,
             "cooldown_seconds": cooldown_seconds,
         }
@@ -416,38 +354,16 @@ class Orchestrator:
             safety_checks=decision.safety_checks + ["cooldown"],
         )
 
-    def _light_call(self, correlation_id: str, *, entity_id: str, state: str) -> ToolCall:
-        tool = "light.set" if entity_id.startswith("light.") else "switch.set"
-        return ToolCall(
-            tool=tool,
-            args={"entity_id": entity_id, "state": state},
-            idempotency_key=new_idempotency_key(),
-            correlation_id=correlation_id,
-        )
+    def _resolve_light_entity_id(self, *, args: dict[str, Any], state: dict[str, Any]) -> str:
+        return str(args.get("light_entity_id") or state.get("light_entity_id") or "light.bedroom_light")
 
-    def _cooling_actions(
-        self, correlation_id: str, *, entity_id: str, temperature: int, fan_mode: str
+    def _materialize_actions(
+        self, correlation_id: str, actions: list[AgentAction]
     ) -> list[ToolCall]:
-        return [
-            ToolCall(
-                tool="climate.set_mode",
-                args={"entity_id": entity_id, "hvac_mode": "cool"},
-                idempotency_key=new_idempotency_key(),
-                correlation_id=correlation_id,
-            ),
-            ToolCall(
-                tool="climate.set_temperature",
-                args={"entity_id": entity_id, "temperature": int(temperature)},
-                idempotency_key=new_idempotency_key(),
-                correlation_id=correlation_id,
-            ),
-            ToolCall(
-                tool="climate.set_fan_mode",
-                args={"entity_id": entity_id, "fan_mode": fan_mode},
-                idempotency_key=new_idempotency_key(),
-                correlation_id=correlation_id,
-            ),
-        ]
+        tool_calls: list[ToolCall] = []
+        for action in actions:
+            tool_calls.extend(action.to_tool_calls(correlation_id))
+        return tool_calls
 
 
 def _humanize_reason(reason: str) -> str:

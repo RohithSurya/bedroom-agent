@@ -1,0 +1,135 @@
+classDiagram
+    class AgentAppState {
+        +build_runtime_state(extra_state, intent) dict
+        +orchestrator: Orchestrator
+        +runner: Runner
+    }
+
+    class Orchestrator {
+        +handle_request(intent, args, state) dict
+        +action_factory: ActionFactory
+        -_resolve_light_entity_id(args, state) str
+        -_materialize_actions(correlation_id, actions) list~ToolCall~
+    }
+
+    class ActionFactory {
+        +light(entity_id, state) LightAction
+        +fan(entity_id, state) FanAction
+        +speech(message) SpeechAction
+        +climate(entity_id, hvac_mode, temperature, fan_mode) ClimatePlan
+    }
+
+    class AgentAction {
+        <<interface>>
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class LightAction {
+        +entity_id: str
+        +state: str
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class FanAction {
+        +entity_id: str
+        +state: str
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class SpeechAction {
+        +message: str
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class ClimatePlan {
+        +entity_id: str
+        +hvac_mode: str
+        +temperature: int?
+        +fan_mode: str?
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class ToolCall {
+        +tool: str
+        +args: dict
+        +idempotency_key: str
+        +correlation_id: str
+        +timeout_s: float?
+    }
+
+    class Runner {
+        +execute_actions(correlation_id, actions, cooldown_key, cooldown_seconds, deadline) dict
+        +read_entity_state(entity_id) dict
+        +behavior_registry: ToolBehaviorRegistry
+    }
+
+    class ToolBehaviorRegistry {
+        +for_call(call) ToolBehavior
+    }
+
+    class ToolBehavior {
+        <<interface>>
+        +is_retryable(call) bool
+        +verify(runner, call, result) dict
+        +is_verification_critical(call) bool
+    }
+
+    class BaseToolBehavior
+    class LightSetBehavior
+    class FanSetBehavior
+    class SwitchSetBehavior
+    class ClimateSetModeBehavior
+    class ClimateSetTemperatureBehavior
+    class ClimateSetFanModeBehavior
+    class TtsSayBehavior
+    class DefaultToolBehavior
+
+    class ToolExecutor {
+        +execute(call) ToolResult
+        +get_state() dict
+    }
+
+    class HAToolClientHTTP {
+        +execute(call) ToolResult
+    }
+
+    class HAToolClientReal {
+        +execute(call) ToolResult
+        +read_entity_state(entity_id) dict
+    }
+
+    class ToolResult {
+        +ok: bool
+        +tool: str
+        +details: dict
+    }
+
+    AgentAppState --> Orchestrator
+    AgentAppState --> Runner
+
+    Orchestrator --> ActionFactory
+    ActionFactory --> AgentAction
+    LightAction ..|> AgentAction
+    FanAction ..|> AgentAction
+    SpeechAction ..|> AgentAction
+    ClimatePlan ..|> AgentAction
+
+    AgentAction --> ToolCall
+
+    Runner --> ToolBehaviorRegistry
+    ToolBehaviorRegistry --> ToolBehavior
+    BaseToolBehavior ..|> ToolBehavior
+    LightSetBehavior --|> BaseToolBehavior
+    FanSetBehavior --|> BaseToolBehavior
+    SwitchSetBehavior --|> BaseToolBehavior
+    ClimateSetModeBehavior --|> BaseToolBehavior
+    ClimateSetTemperatureBehavior --|> BaseToolBehavior
+    ClimateSetFanModeBehavior --|> BaseToolBehavior
+    TtsSayBehavior --|> BaseToolBehavior
+    DefaultToolBehavior --|> BaseToolBehavior
+
+    Runner --> ToolCall
+    Runner --> ToolResult
+    Runner --> ToolExecutor
+    Runner --> HAToolClientHTTP
+    Runner --> HAToolClientReal

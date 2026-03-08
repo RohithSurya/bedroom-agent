@@ -6,7 +6,7 @@ agent_fan_on_request:
     data:
       intent: fan_on
       args:
-        entity_id: switch.bedroom_fan_plug
+        entity_id: fan.bedroom_fan
       state:
         presence: true
         guest_mode: '{{ states(''input_boolean.guest_mode'') == ''on'' }}'
@@ -21,9 +21,6 @@ agent_fan_on_request:
       - service: python_script.touch_entity
         data:
           entity_id: fan.bedroom_fan
-      - service: python_script.touch_entity
-        data:
-          entity_id: switch.bedroom_fan_plug
       - stop: Denied by agent policy
         error: true
 agent_fan_off_request:
@@ -33,7 +30,7 @@ agent_fan_off_request:
   - data:
       intent: fan_off
       args:
-        entity_id: switch.bedroom_fan_plug
+        entity_id: fan.bedroom_fan
       state:
         presence: true
         guest_mode: '{{ is_state(''input_boolean.guest_mode'', ''on'') }}'
@@ -51,9 +48,6 @@ agent_fan_off_request:
       sequence:
       - data:
           entity_id: fan.bedroom_fan
-        action: python_script.touch_entity
-      - data:
-          entity_id: switch.bedroom_fan_plug
         action: python_script.touch_entity
       - stop: 'Denied by agent: {{ reason }}'
         error: true

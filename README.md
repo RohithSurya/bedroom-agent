@@ -64,8 +64,8 @@ flowchart LR
     Presence["mmWave presence sensor\nZigbee"]
     Door["Bedroom door sensor\nZigbee"]
     TempHum["Temp / humidity sensor\nHA entity"]
-    FanPlug["Bedroom fan plug\nswitch.bedroom_fan_plug"]
-    LightSwitch["Bedroom light switch\nswitch.bedroom_light_switch"]
+    Fan["Bedroom fan\nfan.bedroom_fan"]
+    LightSwitch["Bedroom light\nlight.bedroom_light"]
     AC["Vissani window AC"]
   end
 
@@ -87,7 +87,7 @@ flowchart LR
   Presence -->|Zigbee telemetry| ZBT2
   Door -->|Zigbee telemetry| ZBT2
   TempHum -->|sensor state| HA
-  FanPlug <-->|Zigbee switch control| ZBT2
+  Fan <-->|Zigbee control via fan entity| ZBT2
   LightSwitch <-->|Zigbee switch control| ZBT2
 
   ZBT2 --> Z2M
@@ -165,8 +165,8 @@ At runtime the agent looks like this:
 1. Home Assistant or a caller sends `POST /agent/run` or `POST /agent/chat`.
 2. The app builds a runtime state from Home Assistant entities plus stored beliefs and preferences.
 3. `NLRouter` maps text to a high-level intent.
-4. `Orchestrator` converts the intent into deterministic tool calls after policy checks.
-5. `Runner` executes the tool calls, verifies state changes, applies cooldowns, and logs results.
+4. `Orchestrator` uses `ActionFactory` to compose typed actions and materializes them into `ToolCall` objects.
+5. `Runner` resolves each `ToolCall` through `ToolBehaviorRegistry`, then executes, verifies, cools down, and logs results.
 6. MQTT listeners update occupancy and door beliefs continuously in the background.
 7. Optional vision analysis captures a bedroom image and asks the configured LLM/VLM for structured output.
 
@@ -193,7 +193,11 @@ flowchart LR
     Decision["DecisionEngine"]
     Vision["BedroomRoomAnalyzer"]
     Orchestrator["Orchestrator"]
+    Factory["ActionFactory\nLightAction FanAction\nSpeechAction ClimatePlan"]
+    Plan["ToolCall plan\nstable executor boundary"]
     Runner["Runner"]
+    Registry["ToolBehaviorRegistry"]
+    Behavior["Tool behaviors\nLightSet FanSet SwitchSet\nClimateSetMode Temperature FanMode\nTtsSay Default"]
     Tools["HA tool client\nreal / http / local"]
     MQTT["Z2MMqttListener"]
   end
@@ -226,6 +230,9 @@ flowchart LR
   API --> Decision
   API --> Vision
   API --> Orchestrator
+  Orchestrator --> Factory
+  Factory --> Plan
+  Plan --> Runner
 
   Router <--> Model
   Status <--> Model
@@ -233,14 +240,13 @@ flowchart LR
   Vision --> Camera
   Vision <--> Model
 
-  Orchestrator --> Runner
-  Runner --> Tools
+  Runner --> Registry
+  Registry --> Behavior
+  Behavior --> Tools
   Runner --> Jsonl
 
   Broker --> MQTT
   MQTT --> SQLite
-  MQTT --> Orchestrator
-  MQTT --> Runner
 
   State <--> SQLite
   Status --> SQLite
@@ -248,6 +254,146 @@ flowchart LR
   Vision --> SQLite
   API --> SQLite
   HAApi --> Speak
+```
+
+### Internal Runtime Class Diagram
+
+```mermaid
+classDiagram
+    class AgentAppState {
+        +build_runtime_state(extra_state, intent) dict
+        +orchestrator: Orchestrator
+        +runner: Runner
+    }
+
+    class Orchestrator {
+        +handle_request(intent, args, state) dict
+        +action_factory: ActionFactory
+        -_resolve_light_entity_id(args, state) str
+        -_materialize_actions(correlation_id, actions) list~ToolCall~
+    }
+
+    class ActionFactory {
+        +light(entity_id, state) LightAction
+        +fan(entity_id, state) FanAction
+        +speech(message) SpeechAction
+        +climate(entity_id, hvac_mode, temperature, fan_mode) ClimatePlan
+    }
+
+    class AgentAction {
+        <<interface>>
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class LightAction {
+        +entity_id: str
+        +state: str
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class FanAction {
+        +entity_id: str
+        +state: str
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class SpeechAction {
+        +message: str
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class ClimatePlan {
+        +entity_id: str
+        +hvac_mode: str
+        +temperature: int?
+        +fan_mode: str?
+        +to_tool_calls(correlation_id) list~ToolCall~
+    }
+
+    class ToolCall {
+        +tool: str
+        +args: dict
+        +idempotency_key: str
+        +correlation_id: str
+        +timeout_s: float?
+    }
+
+    class Runner {
+        +execute_actions(correlation_id, actions, cooldown_key, cooldown_seconds, deadline) dict
+        +read_entity_state(entity_id) dict
+        +behavior_registry: ToolBehaviorRegistry
+    }
+
+    class ToolBehaviorRegistry {
+        +for_call(call) ToolBehavior
+    }
+
+    class ToolBehavior {
+        <<interface>>
+        +is_retryable(call) bool
+        +verify(runner, call, result) dict
+        +is_verification_critical(call) bool
+    }
+
+    class BaseToolBehavior
+    class LightSetBehavior
+    class FanSetBehavior
+    class SwitchSetBehavior
+    class ClimateSetModeBehavior
+    class ClimateSetTemperatureBehavior
+    class ClimateSetFanModeBehavior
+    class TtsSayBehavior
+    class DefaultToolBehavior
+
+    class ToolExecutor {
+        +execute(call) ToolResult
+        +get_state() dict
+    }
+
+    class HAToolClientHTTP {
+        +execute(call) ToolResult
+    }
+
+    class HAToolClientReal {
+        +execute(call) ToolResult
+        +read_entity_state(entity_id) dict
+    }
+
+    class ToolResult {
+        +ok: bool
+        +tool: str
+        +details: dict
+    }
+
+    AgentAppState --> Orchestrator
+    AgentAppState --> Runner
+
+    Orchestrator --> ActionFactory
+    ActionFactory --> AgentAction
+    LightAction ..|> AgentAction
+    FanAction ..|> AgentAction
+    SpeechAction ..|> AgentAction
+    ClimatePlan ..|> AgentAction
+
+    AgentAction --> ToolCall
+
+    Runner --> ToolBehaviorRegistry
+    ToolBehaviorRegistry --> ToolBehavior
+    BaseToolBehavior ..|> ToolBehavior
+    LightSetBehavior --|> BaseToolBehavior
+    FanSetBehavior --|> BaseToolBehavior
+    SwitchSetBehavior --|> BaseToolBehavior
+    ClimateSetModeBehavior --|> BaseToolBehavior
+    ClimateSetTemperatureBehavior --|> BaseToolBehavior
+    ClimateSetFanModeBehavior --|> BaseToolBehavior
+    TtsSayBehavior --|> BaseToolBehavior
+    DefaultToolBehavior --|> BaseToolBehavior
+
+    Runner --> ToolCall
+    Runner --> ToolResult
+    Runner --> ToolExecutor
+    Runner --> HAToolClientHTTP
+    Runner --> HAToolClientReal
 ```
 
 ### Data Architecture Diagram
@@ -307,7 +453,11 @@ sequenceDiagram
   participant Vision as BedroomRoomAnalyzer
   participant Decide as DecisionEngine
   participant Orch as Orchestrator
+  participant Factory as ActionFactory
   participant Run as Runner
+  participant Registry as ToolBehaviorRegistry
+  participant Behavior as ToolBehavior
+  participant Tool as HA tool client
   participant HAApi as HA service API
 
   User->>Assist: "Tony start focus mode"
@@ -330,16 +480,36 @@ sequenceDiagram
     API->>Decide: choose_intent()
     Decide-->>API: chosen_intent + rationale
     API->>Orch: handle_request(chosen_intent)
+    Orch->>Factory: build AgentAction objects
+    Factory-->>Orch: typed actions
     Orch-->>API: policy + actions
     API->>Run: execute_actions()
-    Run->>HAApi: service calls + verification
+    loop each ToolCall
+      Run->>Registry: for_call(call)
+      Registry-->>Run: ToolBehavior
+      Run->>Tool: execute(call)
+      Tool->>HAApi: service/state API
+      HAApi-->>Tool: response
+      Tool-->>Run: ToolResult
+      Run->>Behavior: verify(call, result)
+    end
     Run-->>API: execution
   else routed action intent
     Router-->>API: focus_start / sleep_mode / fan_on ...
     API->>Orch: handle_request(intent)
+    Orch->>Factory: build AgentAction objects
+    Factory-->>Orch: typed actions
     Orch-->>API: policy + actions
     API->>Run: execute_actions()
-    Run->>HAApi: service calls + verification
+    loop each ToolCall
+      Run->>Registry: for_call(call)
+      Registry-->>Run: ToolBehavior
+      Run->>Tool: execute(call)
+      Tool->>HAApi: service/state API
+      HAApi-->>Tool: response
+      Tool-->>Run: ToolResult
+      Run->>Behavior: verify(call, result)
+    end
     Run-->>API: execution
   end
 
@@ -357,8 +527,12 @@ sequenceDiagram
   participant Broker as MQTT broker
   participant Listener as Z2MMqttListener
   participant DB as SQLite
+  participant App as AgentAppState callback
   participant Orch as Orchestrator
+  participant Factory as ActionFactory
   participant Run as Runner
+  participant Registry as ToolBehaviorRegistry
+  participant Tool as HA tool client
   participant HA as Home Assistant API
 
   Door->>Broker: contact=false
@@ -374,15 +548,26 @@ sequenceDiagram
 
   alt within ENTRY_WINDOW_S and not on cooldown
     Listener->>DB: append enter_detected
-    Listener->>Orch: on_enter callback
-    Orch-->>Run: light-on plan
-    Run->>HA: turn on light / switch
+    Listener->>App: on_enter callback
+    App->>Orch: handle_request(enter_room)
+    Orch->>Factory: build LightAction
+    Factory-->>Orch: typed action
+    Orch-->>App: light-on ToolCall plan
+    App->>Run: execute_actions(plan)
+    Run->>Registry: for_call(light.set)
+    Registry-->>Run: LightSetBehavior
+    Run->>Tool: execute(light.set)
+    Tool->>HA: turn on light
   else presence becomes false
     Listener->>DB: start vacancy timer
     Note over Listener: after VACANCY_OFF_DELAY_S
     Listener->>DB: append vacancy_detected
-    Listener->>Run: on_vacant callback
-    Run->>HA: turn off light / switch
+    Listener->>App: on_vacant callback
+    App->>Run: execute_actions([light.set off])
+    Run->>Registry: for_call(light.set)
+    Registry-->>Run: LightSetBehavior
+    Run->>Tool: execute(light.set)
+    Tool->>HA: turn off light
     Listener->>DB: append vacancy_off_executed
   end
 ```
@@ -390,6 +575,7 @@ sequenceDiagram
 Mermaid source files also live in `docs/`:
 
 - `docs/architecture.mmd`
+- `docs/agent_runtime_class.mmd`
 - `docs/container_services.mmd`
 - `docs/physical_integration.mmd`
 - `docs/voice_chat_flow.mmd`

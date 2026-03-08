@@ -13,7 +13,7 @@ from agent.runner import Runner
 def test_breaker_short_circuits_after_threshold(tmp_path):
     logger = JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York")
     ex = ToolExecutor(mode="active")
-    ex.inject_failure(tool="switch.set", times=10, error="simulated_timeout")
+    ex.inject_failure(tool="fan.set", times=10, error="simulated_timeout")
 
     runner = Runner(
         executor=ex,
@@ -26,8 +26,8 @@ def test_breaker_short_circuits_after_threshold(tmp_path):
 
     calls = [
         ToolCall(
-            tool="switch.set",
-            args={"entity_id": "switch.bedroom_fan_plug", "state": "on"},
+            tool="fan.set",
+            args={"entity_id": "fan.bedroom_fan", "state": "on"},
             idempotency_key=f"k{i}",
             correlation_id="c1",
         )
@@ -44,7 +44,7 @@ def test_breaker_short_circuits_after_threshold(tmp_path):
 def test_breaker_recovers_after_timeout(tmp_path):
     logger = JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York")
     ex = ToolExecutor(mode="active")
-    ex.inject_failure(tool="switch.set", times=2, error="simulated_timeout")
+    ex.inject_failure(tool="fan.set", times=2, error="simulated_timeout")
 
     runner = Runner(
         executor=ex,
@@ -56,20 +56,20 @@ def test_breaker_recovers_after_timeout(tmp_path):
     )
 
     c1 = ToolCall(
-        tool="switch.set",
-        args={"entity_id": "switch.bedroom_fan_plug", "state": "on"},
+        tool="fan.set",
+        args={"entity_id": "fan.bedroom_fan", "state": "on"},
         idempotency_key="k1",
         correlation_id="c2",
     )
     c2 = ToolCall(
-        tool="switch.set",
-        args={"entity_id": "switch.bedroom_fan_plug", "state": "on"},
+        tool="fan.set",
+        args={"entity_id": "fan.bedroom_fan", "state": "on"},
         idempotency_key="k2",
         correlation_id="c2",
     )
     c3 = ToolCall(
-        tool="switch.set",
-        args={"entity_id": "switch.bedroom_fan_plug", "state": "on"},
+        tool="fan.set",
+        args={"entity_id": "fan.bedroom_fan", "state": "on"},
         idempotency_key="k3",
         correlation_id="c2",
     )

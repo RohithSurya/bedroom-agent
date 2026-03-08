@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict
 import requests
 
 from contracts.ha import ToolCall, ToolResult
 from core.logging_jsonl import JsonlLogger
+from requests.adapters import HTTPAdapter
 
 
 @dataclass
@@ -17,6 +18,17 @@ class HAToolClientReal:
     timeout_s: float = 5.0
     tts_media_player: str = "media_player.main_bedroom"
     tts_entity_id = "tts.google_translate_en_com"
+    session: requests.Session | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self.base_url = self.base_url.rstrip("/")
+        if self.session is None:
+            self.session = requests.Session()
+
+            # optional: better pooling
+            adapter = HTTPAdapter(pool_connections=15, pool_maxsize=15, max_retries=0)
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -28,14 +40,16 @@ class HAToolClientReal:
         return self.base_url.rstrip("/") + path
 
     def _post_service(self, domain: str, service: str, payload: Dict[str, Any]) -> ToolResult:
-        if self.mode == "shadow":
-            return ToolResult(
-                ok=True, tool=f"{domain}.{service}", details={"shadow": True, "payload": payload}
-            )
+        # if self.mode == "shadow":
+        #     return ToolResult(
+        #         ok=True,
+        #         tool=call.tool,
+        #         details={"shadow": True, "note": "shadow_mode", "args": dict(call.args)},
+        #     )
 
         try:
             timeout = self.timeout_s if self.timeout_s is not None else 8.0
-            r = requests.post(
+            r = self.session.post(
                 self._url(f"/api/services/{domain}/{service}"),
                 headers=self._headers(),
                 json=payload,
@@ -63,7 +77,7 @@ class HAToolClientReal:
 
     def read_entity_state(self, entity_id: str) -> Dict[str, Any]:
         try:
-            r = requests.get(
+            r = self.session.get(
                 self._url(f"/api/states/{entity_id}"),
                 headers=self._headers(),
                 timeout=self.timeout_s,
@@ -89,7 +103,7 @@ class HAToolClientReal:
     def prime_tts(self, message: str) -> None:
         """Pre-cache TTS audio to avoid startup delay on first use."""
         try:
-            requests.post(
+            self.session.post(
                 self._url("/api/tts_get_url"),
                 headers=self._headers(),
                 json={
@@ -125,7 +139,16 @@ class HAToolClientReal:
             service = "turn_on" if state == "on" else "turn_off"
             return self._post_service("light", service, payload)
 
-        # fan plug
+        if tool == "fan.set":
+            entity_id = str(call.args.get("entity_id"))
+            state = str(call.args.get("state", "off")).lower()
+            if state not in ("on", "off"):
+                return ToolResult(
+                    ok=False, tool=tool, details={"error": "invalid_state", "state": state}
+                )
+            service = "turn_on" if state == "on" else "turn_off"
+            return self._post_service("fan", service, {"entity_id": entity_id})
+
         if tool == "switch.set":
             entity_id = str(call.args.get("entity_id"))
             state = str(call.args.get("state", "off")).lower()

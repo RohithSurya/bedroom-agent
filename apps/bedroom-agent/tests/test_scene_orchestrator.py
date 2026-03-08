@@ -8,9 +8,9 @@ def _base_state() -> dict:
         "presence": True,
         "guest_mode": False,
         "room_uncomfortable": True,
-        "light_entity_id": "switch.bedroom_light_switch",
+        "light_entity_id": "light.bedroom_light",
         "light_state": "off",
-        "fan_entity_id": "switch.bedroom_fan_plug",
+        "fan_entity_id": "fan.bedroom_fan",
         "fan_state": "off",
         "ac_entity_id": "climate.bedroom_ac",
         "ac_available": True,
@@ -42,7 +42,7 @@ def test_sleep_mode_turns_off_light_and_cools():
 
     tools = [call.tool for call in out["actions"]]
     assert out["decision"].decision == "allow"
-    assert tools[0] == "switch.set"
+    assert tools[0] == "light.set"
     assert tools[1:] == [
         "climate.set_mode",
         "climate.set_temperature",
@@ -59,5 +59,54 @@ def test_focus_start_uses_fan_fallback_without_ac():
 
     tools = [call.tool for call in out["actions"]]
     assert out["decision"].decision == "allow"
-    assert "switch.set" in tools
+    assert "fan.set" in tools
     assert "tts.say" in tools
+
+
+def test_fan_on_emits_fan_set():
+    orch = Orchestrator()
+    out = orch.handle_request(intent="fan_on", args={}, state=_base_state())
+
+    assert out["decision"].decision == "allow"
+    assert out["actions"][0].tool == "fan.set"
+    assert out["actions"][0].args["entity_id"] == "fan.bedroom_fan"
+    assert out["actions"][0].args["state"] == "on"
+
+
+def test_fan_off_emits_fan_set():
+    orch = Orchestrator()
+    out = orch.handle_request(intent="fan_off", args={}, state=_base_state())
+
+    assert out["decision"].decision == "allow"
+    assert out["actions"][0].tool == "fan.set"
+    assert out["actions"][0].args["entity_id"] == "fan.bedroom_fan"
+    assert out["actions"][0].args["state"] == "off"
+
+
+def test_sleep_mode_accepts_light_entity_id_override():
+    orch = Orchestrator()
+    state = _base_state()
+    state["light_state"] = "on"
+
+    out = orch.handle_request(
+        intent="sleep_mode",
+        args={"light_entity_id": "light.bedlamp"},
+        state=state,
+    )
+
+    assert out["actions"][0].tool == "light.set"
+    assert out["actions"][0].args["entity_id"] == "light.bedlamp"
+
+
+def test_focus_start_accepts_light_entity_id_override():
+    orch = Orchestrator()
+    state = _base_state()
+
+    out = orch.handle_request(
+        intent="focus_start",
+        args={"light_entity_id": "light.bedlamp"},
+        state=state,
+    )
+
+    assert out["actions"][0].tool == "light.set"
+    assert out["actions"][0].args["entity_id"] == "light.bedlamp"

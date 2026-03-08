@@ -88,6 +88,7 @@ class Z2MMqttListener:
     vacancy_off_delay_s: int
 
     kv: SqliteKV
+    connected: bool = field(default=False, init=False)
 
     # callback called when we detect an entry event
     on_enter: Callable[[dict[str, Any]], None]
@@ -99,6 +100,7 @@ class Z2MMqttListener:
 
     def start(self) -> None:
         client = mqtt.Client(client_id=f"bedroom-agent-{int(time.time())}", clean_session=True)
+        client.reconnect_delay_set(min_delay=1, max_delay=30)
         if self.mqtt_username:
             client.username_pw_set(self.mqtt_username, self.mqtt_password or "")
 
@@ -126,6 +128,7 @@ class Z2MMqttListener:
 
     def _on_connect(self, client: mqtt.Client, userdata: Any, flags: dict, rc: int) -> None:
         # Subscribe only to the topics we care about (fast + low noise)
+        self.connected = rc == 0
         client.subscribe(self.door_topic)
         client.subscribe(self.presence_topic)
         self.kv.append_event(
@@ -134,6 +137,7 @@ class Z2MMqttListener:
         )
 
     def _on_disconnect(self, client: mqtt.Client, userdata: Any, rc: int) -> None:
+        self.connected = False
         self.kv.append_event("mqtt_disconnected", {"rc": rc})
 
     def _on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
@@ -267,9 +271,7 @@ class Z2MMqttListener:
             self.kv.append_event("vacancy_timer_ignored_presence_returned", {})
             return
 
-        last_presence_false_ts = float(
-            self.kv.get("belief", "last_presence_false_ts", 0.0) or 0.0
-        )
+        last_presence_false_ts = float(self.kv.get("belief", "last_presence_false_ts", 0.0) or 0.0)
         self.kv.append_event(
             "vacancy_detected",
             {

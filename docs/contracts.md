@@ -62,9 +62,9 @@ Successful response shape:
   },
   "actions": [
     {
-      "tool": "switch.set",
+      "tool": "fan.set",
       "args": {
-        "entity_id": "switch.bedroom_fan_plug",
+        "entity_id": "fan.bedroom_fan",
         "state": "on"
       },
       "idempotency_key": "idem_...",
@@ -74,7 +74,7 @@ Successful response shape:
   "execution": {
     "success": true,
     "failures": [],
-    "executed_tools": ["switch.set", "tts.say"]
+    "executed_tools": ["fan.set", "tts.say"]
   }
 }
 ```
@@ -202,9 +202,9 @@ Defined in `src/contracts/ha.py`.
 
 ```json
 {
-  "tool": "switch.set",
+  "tool": "fan.set",
   "args": {
-    "entity_id": "switch.bedroom_fan_plug",
+    "entity_id": "fan.bedroom_fan",
     "state": "on"
   },
   "idempotency_key": "idem_...",
@@ -217,7 +217,7 @@ Defined in `src/contracts/ha.py`.
 ```json
 {
   "ok": true,
-  "tool": "switch.turn_on",
+  "tool": "fan.turn_on",
   "details": {
     "status": 200
   }
@@ -226,6 +226,7 @@ Defined in `src/contracts/ha.py`.
 
 Supported tool names in the current real HA client:
 
+- `fan.set`
 - `light.set`
 - `switch.set`
 - `climate.set_mode`
@@ -266,6 +267,8 @@ Current derived keys include:
 - `humidity_pct`
 - `light_entity_id`
 - `light_state`
+- `bedroom_lamp_entity_id`
+- `bedroom_lamp_state`
 - `fan_entity_id`
 - `fan_state`
 - `ac_entity_id`
@@ -328,7 +331,6 @@ Stored in SQLite `events` and used by status/decision logic:
 - `door_update`
 - `presence_update`
 - `enter_detected`
-- `enter_room_skipped_quiet_hours_switch`
 - `enter_room_skipped_already_on`
 - `vacancy_detected`
 - `vacancy_off_executed`

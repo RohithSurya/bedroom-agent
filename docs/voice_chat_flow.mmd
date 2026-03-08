@@ -9,7 +9,11 @@ sequenceDiagram
   participant Vision as BedroomRoomAnalyzer
   participant Decide as DecisionEngine
   participant Orch as Orchestrator
+  participant Factory as ActionFactory
   participant Run as Runner
+  participant Registry as ToolBehaviorRegistry
+  participant Behavior as ToolBehavior
+  participant Tool as HA tool client
   participant HAApi as HA service API
 
   User->>Assist: "Tony start focus mode"
@@ -32,16 +36,36 @@ sequenceDiagram
     API->>Decide: choose_intent()
     Decide-->>API: chosen_intent + rationale
     API->>Orch: handle_request(chosen_intent)
+    Orch->>Factory: build AgentAction objects
+    Factory-->>Orch: typed actions
     Orch-->>API: policy + actions
     API->>Run: execute_actions()
-    Run->>HAApi: service calls + verification
+    loop each ToolCall
+      Run->>Registry: for_call(call)
+      Registry-->>Run: ToolBehavior
+      Run->>Tool: execute(call)
+      Tool->>HAApi: service/state API
+      HAApi-->>Tool: response
+      Tool-->>Run: ToolResult
+      Run->>Behavior: verify(call, result)
+    end
     Run-->>API: execution
   else routed action intent
     Router-->>API: focus_start / sleep_mode / fan_on ...
     API->>Orch: handle_request(intent)
+    Orch->>Factory: build AgentAction objects
+    Factory-->>Orch: typed actions
     Orch-->>API: policy + actions
     API->>Run: execute_actions()
-    Run->>HAApi: service calls + verification
+    loop each ToolCall
+      Run->>Registry: for_call(call)
+      Registry-->>Run: ToolBehavior
+      Run->>Tool: execute(call)
+      Tool->>HAApi: service/state API
+      HAApi-->>Tool: response
+      Tool-->>Run: ToolResult
+      Run->>Behavior: verify(call, result)
+    end
     Run-->>API: execution
   end
 

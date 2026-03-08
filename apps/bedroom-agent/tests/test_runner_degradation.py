@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agent.actions import ActionFactory
 from agent.orchestrator import Orchestrator
 from agent.runner import Runner
 from core.logging_jsonl import JsonlLogger
@@ -10,7 +11,7 @@ from reliability.retry import RetryPolicy
 def test_runner_emits_fallback_tts_on_light_failure(tmp_path):
     logger = JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York")
     ex = ToolExecutor(mode="active")
-    ex.inject_failure(tool="switch.set", times=2, error="simulated_timeout")  # hard fail
+    ex.inject_failure(tool="light.set", times=2, error="simulated_timeout")  # hard fail
 
     orch = Orchestrator()
     out = orch.handle_request(
@@ -28,29 +29,16 @@ def test_runner_verifies_climate_actions(tmp_path):
     logger = JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York")
     ex = ToolExecutor(mode="active")
     runner = Runner(executor=ex, logger=logger, retry_attempts=0)
+    calls = ActionFactory().climate(
+        entity_id="climate.bedroom_ac",
+        hvac_mode="cool",
+        temperature=24,
+        fan_mode="auto",
+    ).to_tool_calls("cid")
 
     run_out = runner.execute_actions(
         correlation_id="cid",
-        actions=[
-            Orchestrator()._cooling_actions(
-                "cid",
-                entity_id="climate.bedroom_ac",
-                temperature=24,
-                fan_mode="auto",
-            )[0],
-            Orchestrator()._cooling_actions(
-                "cid",
-                entity_id="climate.bedroom_ac",
-                temperature=24,
-                fan_mode="auto",
-            )[1],
-            Orchestrator()._cooling_actions(
-                "cid",
-                entity_id="climate.bedroom_ac",
-                temperature=24,
-                fan_mode="auto",
-            )[2],
-        ],
+        actions=calls,
     )
 
     assert run_out["success"] is True
@@ -60,10 +48,10 @@ def test_runner_verifies_climate_actions(tmp_path):
     assert climate["fan_mode"] == "auto"
 
 
-def test_runner_marks_failure_on_switch_failure(tmp_path):
+def test_runner_marks_failure_on_fan_failure(tmp_path):
     logger = JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York")
     ex = ToolExecutor(mode="active")
-    ex.inject_failure(tool="switch.set", times=1, error="simulated_error")  # non-transient-ish
+    ex.inject_failure(tool="fan.set", times=1, error="simulated_error")  # non-transient-ish
 
     orch = Orchestrator()
     out = orch.handle_request(
@@ -74,13 +62,13 @@ def test_runner_marks_failure_on_switch_failure(tmp_path):
     run_out = runner.execute_actions(correlation_id=out["correlation_id"], actions=out["actions"])
 
     assert run_out["success"] is False
-    assert any(f["tool"] == "switch.set" for f in run_out["failures"])
+    assert any(f["tool"] == "fan.set" for f in run_out["failures"])
 
 
-def test_runner_retries_transient_switch_failure(tmp_path):
+def test_runner_retries_transient_fan_failure(tmp_path):
     logger = JsonlLogger(log_dir=str(tmp_path), tz_name="America/New_York")
     ex = ToolExecutor(mode="active")
-    ex.inject_failure(tool="switch.set", times=1, error="simulated_timeout")  # transient
+    ex.inject_failure(tool="fan.set", times=1, error="simulated_timeout")  # transient
 
     orch = Orchestrator()
     out = orch.handle_request(

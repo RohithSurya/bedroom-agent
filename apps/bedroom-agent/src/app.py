@@ -4,10 +4,10 @@ from contextlib import asynccontextmanager
 import time
 import requests
 from typing import Any, Literal
-from requests.adapters import HTTPAdapter
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
+from pathlib import Path
 
 from agent.decision_engine import DecisionEngine
 from agent.mqtt_listener import Z2MMqttListener
@@ -66,10 +66,6 @@ class AgentAppState:
         self.settings = settings
         self.cooldowns = cooldowns
         self.logger = JsonlLogger(log_dir=settings.LOG_DIR, tz_name=settings.TIMEZONE)
-        self.http = requests.Session()
-        adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
-        self.http.mount("http://", adapter)
-        self.http.mount("https://", adapter)
 
         def _make_llm_client(timeout_s: float):
             return build_llm_client(
@@ -146,6 +142,7 @@ class AgentAppState:
         if not intent:
             return {
                 self.settings.ENTRY_LIGHT_ENTITY_ID,
+                self.settings.BEDROOM_LAMP_ENTITY_ID,
                 self.settings.BEDROOM_FAN_ENTITY_ID,
                 self.settings.BEDROOM_AC_ENTITY_ID,
                 self.settings.TEMP_SENSOR_ENTITY_ID,
@@ -160,8 +157,11 @@ class AgentAppState:
 
         ids: set[str] = set()
 
-        if intent in light_check_intents and self.settings.ENTRY_LIGHT_ENTITY_ID:
-            ids.add(self.settings.ENTRY_LIGHT_ENTITY_ID)
+        if intent in light_check_intents:
+            if self.settings.ENTRY_LIGHT_ENTITY_ID:
+                ids.add(self.settings.ENTRY_LIGHT_ENTITY_ID)
+            if self.settings.BEDROOM_LAMP_ENTITY_ID:
+                ids.add(self.settings.BEDROOM_LAMP_ENTITY_ID)
 
         if intent in env_intents:
             if self.settings.BEDROOM_AC_ENTITY_ID:
@@ -213,6 +213,7 @@ class AgentAppState:
         prefs = self.kv.get_namespace("prefs")
 
         light_entity_id = self.settings.ENTRY_LIGHT_ENTITY_ID
+        bedroom_lamp_entity_id = self.settings.BEDROOM_LAMP_ENTITY_ID
         fan_entity_id = self.settings.BEDROOM_FAN_ENTITY_ID
         ac_entity_id = self.settings.BEDROOM_AC_ENTITY_ID
         temp_entity_id = self.settings.TEMP_SENSOR_ENTITY_ID
@@ -229,6 +230,7 @@ class AgentAppState:
             return self.runner.read_entity_state(eid)
 
         light_raw = read_if_needed(light_entity_id)
+        bedroom_lamp_raw = read_if_needed(bedroom_lamp_entity_id)
         fan_raw = read_if_needed(fan_entity_id)
         ac_raw = read_if_needed(ac_entity_id)
         temp_raw = read_if_needed(temp_entity_id)
@@ -249,6 +251,8 @@ class AgentAppState:
             "humidity_pct": humidity_pct,
             "light_entity_id": light_entity_id,
             "light_state": str(light_raw.get("state", "unknown")).lower(),
+            "bedroom_lamp_entity_id": bedroom_lamp_entity_id,
+            "bedroom_lamp_state": str(bedroom_lamp_raw.get("state", "unknown")).lower(),
             "fan_entity_id": fan_entity_id,
             "fan_state": str(fan_raw.get("state", "unknown")).lower(),
             "ac_entity_id": ac_entity_id,
@@ -289,12 +293,6 @@ class AgentAppState:
     def _on_enter_room(self, meta: dict[str, Any]) -> None:
         entity_id = self.settings.ENTRY_LIGHT_ENTITY_ID
         quiet = bool(meta.get("quiet_hours", False))
-        domain = entity_id.split(".", 1)[0]
-
-        # Switch can’t dim: skip during quiet hours to avoid blasting light at night
-        if quiet and domain == "switch":
-            self.kv.append_event("enter_room_skipped_quiet_hours_switch", {"entity_id": entity_id})
-            return
 
         # Skip if already on
         already_on = False
@@ -313,7 +311,7 @@ class AgentAppState:
 
         plan = self.orchestrator.handle_request(
             intent="enter_room",
-            args={"entity_id": entity_id},
+            args={"light_entity_id": entity_id},
             state=state,
         )
 
@@ -326,11 +324,6 @@ class AgentAppState:
 
     def _on_room_vacant(self, meta: dict[str, Any]) -> None:
         entity_id = self.settings.ENTRY_LIGHT_ENTITY_ID
-        domain = entity_id.split(".", 1)[0]
-
-        if domain not in {"switch", "light"}:
-            self.kv.append_event("vacancy_off_skipped_unsupported_entity", {"entity_id": entity_id})
-            return
 
         if bool(self.kv.get("belief", "presence", False)):
             self.kv.append_event("vacancy_off_skipped_presence_returned", {"entity_id": entity_id})
@@ -345,18 +338,13 @@ class AgentAppState:
             self.kv.append_event("vacancy_off_skipped_already_off", {"entity_id": entity_id})
             return
 
-        tool_name = "switch.set" if domain == "switch" else "light.set"
-        off_args = {"entity_id": entity_id, "state": "off"}
-        if tool_name == "light.set":
-            off_args["state"] = "off"
-
         correlation_id = new_correlation_id()
         self.runner.execute_actions(
             correlation_id=correlation_id,
             actions=[
                 ToolCall(
-                    tool=tool_name,
-                    args=off_args,
+                    tool="light.set",
+                    args={"entity_id": entity_id, "state": "off"},
                     idempotency_key=new_idempotency_key(),
                     correlation_id=correlation_id,
                 )
@@ -387,7 +375,9 @@ def _build_executor(
             timeout_s=20,  # real HA calls can be slower, especially with TTS; increase timeout
         )
 
-    raise ValueError(f"Unsupported TOOL_BACKEND '{settings.TOOL_BACKEND}'. Use 'local' or 'http'.")
+    raise ValueError(
+        f"Unsupported TOOL_BACKEND '{settings.TOOL_BACKEND}'. Use 'local', 'http', or 'ha'."
+    )
 
 
 @asynccontextmanager
@@ -413,6 +403,188 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Bedroom Agent", lifespan=lifespan)
 
 
+def _resolve_path(raw_path: str) -> Path:
+    p = Path(raw_path)
+    return p if p.is_absolute() else (Path.cwd() / p).resolve()
+
+
+def _check_vision(agent: AgentAppState) -> dict[str, Any]:
+    if not bool(agent.settings.VISION_ANALYSIS_ENABLED):
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "vision disabled",
+        }
+
+    camera_mode = str(agent.settings.CAMERA_MODE).strip().lower()
+
+    if camera_mode != "file":
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": f"camera_mode={camera_mode}",
+        }
+
+    raw_path = str(agent.settings.VISION_FALLBACK_IMAGE_PATH)
+    path = _resolve_path(raw_path)
+    exists = path.exists() and path.is_file()
+
+    return {
+        "ok": exists,
+        "camera_mode": camera_mode,
+        "path": str(path),
+        "exists": exists,
+    }
+
+
+def _check_tool_backend(agent: AgentAppState) -> dict[str, Any]:
+    backend = str(agent.settings.TOOL_BACKEND).strip().lower()
+    executor = agent.runner.executor
+
+    if backend == "local":
+        return {
+            "ok": isinstance(executor, ToolExecutor),
+            "backend": backend,
+            "executor_type": type(executor).__name__,
+        }
+
+    if backend == "http":
+        if not isinstance(executor, HAToolClientHTTP):
+            return {
+                "ok": False,
+                "backend": backend,
+                "error": f"unexpected executor type: {type(executor).__name__}",
+            }
+
+        base_url = str(agent.settings.HA_BASE_URL).rstrip("/")
+        candidates = [
+            f"{base_url}/health",
+            f"{base_url}/healthz",
+            f"{base_url}/",
+        ]
+
+        last_error = None
+        for url in candidates:
+            try:
+                resp = requests.get(url, timeout=2)
+                if resp.ok:
+                    return {
+                        "ok": True,
+                        "backend": backend,
+                        "url": url,
+                        "status_code": resp.status_code,
+                    }
+                last_error = f"{url} -> {resp.status_code}"
+            except Exception as e:
+                last_error = f"{url} -> {e}"
+
+        return {
+            "ok": False,
+            "backend": backend,
+            "error": last_error or "http backend probe failed",
+        }
+
+    if backend == "ha":
+        if not isinstance(executor, HAToolClientReal):
+            return {
+                "ok": False,
+                "backend": backend,
+                "error": f"unexpected executor type: {type(executor).__name__}",
+            }
+
+        base_url = str(agent.settings.HA_BASE_URL).rstrip("/")
+        token = str(agent.settings.HA_TOKEN)
+
+        if not base_url or not token:
+            return {
+                "ok": False,
+                "backend": backend,
+                "error": "missing HA_BASE_URL or HA_TOKEN",
+            }
+
+        try:
+            resp = requests.get(
+                f"{base_url}/api/",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                timeout=2,
+            )
+            return {
+                "ok": resp.status_code == 200,
+                "backend": backend,
+                "url": f"{base_url}/api/",
+                "status_code": resp.status_code,
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "backend": backend,
+                "error": f"ha backend probe failed: {e}",
+            }
+
+    return {
+        "ok": False,
+        "backend": backend,
+        "error": f"unsupported backend '{backend}'",
+    }
+
+
+def _check_mqtt(agent: AgentAppState) -> dict[str, Any]:
+    mqtt_listener = agent.mqtt
+    return {
+        "ok": bool(mqtt_listener.connected),
+        "connected": bool(mqtt_listener.connected),
+        "host": mqtt_listener.mqtt_host,
+        "port": mqtt_listener.mqtt_port,
+        "door_topic": mqtt_listener.door_topic,
+        "presence_topic": mqtt_listener.presence_topic,
+    }
+
+
+def _check_llm(agent: AgentAppState) -> dict[str, Any]:
+    base_url = str(agent.settings.LLM_BASE_URL or "").rstrip("/")
+
+    if not base_url:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "LLM_BASE_URL not configured",
+        }
+
+    headers = {}
+    api_key = str(agent.settings.OPENAI_API_KEY or "").strip()
+    if api_key and api_key not in {"token", "YOUR_API_KEY_HERE"}:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    candidates = [
+        f"{base_url}/v1/models",
+        f"{base_url}/models",
+        f"{base_url}/health",
+        f"{base_url}/healthz",
+    ]
+
+    last_error = None
+    for url in candidates:
+        try:
+            resp = requests.get(url, headers=headers, timeout=2)
+            if resp.ok:
+                return {
+                    "ok": True,
+                    "url": url,
+                    "status_code": resp.status_code,
+                }
+            last_error = f"{url} -> {resp.status_code}"
+        except Exception as e:
+            last_error = f"{url} -> {e}"
+
+    return {
+        "ok": False,
+        "error": last_error or "llm probe failed",
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     state = app.state.agent
@@ -420,6 +592,28 @@ def health() -> dict[str, Any]:
         "ok": True,
         "mode": state.settings.AGENT_MODE,
         "backend": state.settings.TOOL_BACKEND,
+    }
+
+
+@app.get("/readyz")
+def readyz(response: Response) -> dict[str, Any]:
+    agent = app.state.agent
+
+    checks = {
+        "tool_backend": _check_tool_backend(agent),
+        "mqtt": _check_mqtt(agent),
+        "llm": _check_llm(agent),
+        "vision": _check_vision(agent),
+    }
+
+    ok = all(check["ok"] for check in checks.values())
+    response.status_code = 200 if ok else 503
+
+    return {
+        "ok": ok,
+        "mode": agent.settings.AGENT_MODE,
+        "backend": agent.settings.TOOL_BACKEND,
+        "checks": checks,
     }
 
 
@@ -478,8 +672,15 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
         intent, args = app.state.agent.router.route(text=req.text, state={})
         t_nl_router = time.perf_counter()
 
+        t_before_state = time.perf_counter()
+        state = app.state.agent.build_runtime_state(req.state)
+        t_state = time.perf_counter()
+
         if intent == "status":
-            result = app.state.agent.status_service.handle_query(args.get("query", req.text))
+            result = app.state.agent.status_service.handle_query(
+                args.get("query", req.text),
+                runtime_state=state,
+            )
             t_status = time.perf_counter()
             return {
                 "mode": "info",
@@ -487,7 +688,8 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                 "result": result,
                 "timings_ms": {
                     "nl_router": round((t_nl_router - t0) * 1000, 1),
-                    "status_service": round((t_status - t_nl_router) * 1000, 1),
+                    "state": round((t_state - t_before_state) * 1000, 1),
+                    "status_service": round((t_status - t_state) * 1000, 1),
                 },
             }
 
@@ -503,10 +705,6 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                     "analyze_bedroom": round((t_analyze_bedroom - t_nl_router) * 1000, 1),
                 },
             }
-        t_before_state = time.perf_counter()
-        state = app.state.agent.build_runtime_state(req.state)
-        t_state = time.perf_counter()
-
         if intent == "decision_request":
             agent = app.state.agent
             agent.kv.append_event(

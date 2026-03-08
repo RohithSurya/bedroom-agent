@@ -42,8 +42,9 @@ class Settings(BaseSettings):
     # Enter-room behavior
     ENTRY_WINDOW_S: int = 12  # door open -> presence true within this window triggers
     ENTRY_COOLDOWN_S: int = 90  # minimum time between triggers
-    ENTRY_LIGHT_ENTITY_ID: str = "switch.bedroom_light_switch"
-    BEDROOM_FAN_ENTITY_ID: str = "switch.bedroom_fan_plug"
+    ENTRY_LIGHT_ENTITY_ID: str = "light.bedroom_light"
+    BEDROOM_LAMP_ENTITY_ID: str = "light.bedlamp"
+    BEDROOM_FAN_ENTITY_ID: str = "fan.bedroom_fan"
     BEDROOM_AC_ENTITY_ID: str = "climate.bedroom_ac"
     VACANCY_OFF_DELAY_S: int = 120  # turn lights off after this much no-presence time
     TEMP_SENSOR_ENTITY_ID: str = "sensor.temp_humidity_sensor_temperature"

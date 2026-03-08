@@ -29,12 +29,15 @@ class ToolExecutor:
 
     device_state: Dict[str, Any] = field(
         default_factory=lambda: {
-            "lights": {"light.bedroom_lamp": {"brightness_pct": 100}},
-            "tts": [],
-            "switches": {
-                "switch.bedroom_fan_plug": {"state": "off"},
-                "switch.bedroom_light_switch": {"state": "off"},
+            "lights": {
+                "light.bedroom_light": {"state": "off"},
+                "light.bedlamp": {"state": "off"},
             },
+            "fans": {
+                "fan.bedroom_fan": {"state": "off"},
+            },
+            "tts": [],
+            "switches": {},
             "climate": {
                 "climate.bedroom_ac": {
                     "state": "off",
@@ -120,20 +123,49 @@ class ToolExecutor:
 
         # ACTIVE mode: apply side effects
         if call.tool == "light.set":
-            entity_id = str(call.args.get("entity_id", "light.bedroom_lamp"))
+            entity_id = str(call.args.get("entity_id", "light.bedroom_light"))
             state = str(call.args.get("state", "on")).lower()
             if state not in ("on", "off"):
                 result = ToolResult(
                     ok=False, tool=call.tool, details={"error": "invalid_state", "state": state}
                 )
             else:
-                brightness_pct = int(call.args.get("brightness_pct", 15))
-                transition_s = float(call.args.get("transition_s", 0))
+                brightness_pct: int | None = None
+                transition_s: float | None = None
+
+                if "brightness_pct" in call.args:
+                    try:
+                        brightness_pct = int(call.args.get("brightness_pct"))
+                    except Exception:
+                        result = ToolResult(
+                            ok=False,
+                            tool=call.tool,
+                            details={
+                                "error": "invalid_brightness_pct",
+                                "brightness_pct": call.args.get("brightness_pct"),
+                            },
+                        )
+                        return result
+
+                if "transition_s" in call.args:
+                    try:
+                        transition_s = float(call.args.get("transition_s"))
+                    except Exception:
+                        result = ToolResult(
+                            ok=False,
+                            tool=call.tool,
+                            details={
+                                "error": "invalid_transition_s",
+                                "transition_s": call.args.get("transition_s"),
+                            },
+                        )
+                        return result
 
                 self.device_state["lights"].setdefault(entity_id, {})
                 self.device_state["lights"][entity_id]["state"] = state
-                self.device_state["lights"][entity_id]["transition_s"] = transition_s
-                if state == "on":
+                if transition_s is not None:
+                    self.device_state["lights"][entity_id]["transition_s"] = transition_s
+                if state == "on" and brightness_pct is not None:
                     self.device_state["lights"][entity_id]["brightness_pct"] = brightness_pct
 
                 result = ToolResult(
@@ -152,6 +184,22 @@ class ToolExecutor:
             msg = str(call.args.get("message", ""))
             self.device_state["tts"].append(msg)
             result = ToolResult(ok=True, tool=call.tool, details={"cached": False, "message": msg})
+
+        elif call.tool == "fan.set":
+            entity_id = str(call.args.get("entity_id", "fan.bedroom_fan"))
+            state = str(call.args.get("state", "off")).lower()
+            if state not in ("on", "off"):
+                result = ToolResult(
+                    ok=False, tool=call.tool, details={"error": "invalid_state", "state": state}
+                )
+            else:
+                self.device_state["fans"].setdefault(entity_id, {})
+                self.device_state["fans"][entity_id]["state"] = state
+                result = ToolResult(
+                    ok=True,
+                    tool=call.tool,
+                    details={"entity_id": entity_id, "state": state},
+                )
 
         elif call.tool == "switch.set":
             entity_id = str(call.args.get("entity_id"))

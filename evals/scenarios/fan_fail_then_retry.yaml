@@ -1,5 +1,5 @@
 name: fan_fail_then_retry
-description: "switch.set fails once then succeeds on retry"
+description: "fan.set fails once then succeeds on retry"
 
 initial_state:
   presence: true
@@ -9,9 +9,9 @@ steps:
   - request:
       intent: fan_on
       args:
-        entity_id: switch.bedroom_fan_plug
+        entity_id: fan.bedroom_fan
     failure_injection:
-      - tool: switch.set
+      - tool: fan.set
         times: 1
         error: simulated_timeout
     expect:

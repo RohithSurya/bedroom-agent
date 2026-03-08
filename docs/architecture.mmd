@@ -18,7 +18,11 @@ flowchart LR
     Decision["DecisionEngine"]
     Vision["BedroomRoomAnalyzer"]
     Orchestrator["Orchestrator"]
+    Factory["ActionFactory\nLightAction FanAction\nSpeechAction ClimatePlan"]
+    Plan["ToolCall plan\nstable executor boundary"]
     Runner["Runner"]
+    Registry["ToolBehaviorRegistry"]
+    Behavior["Tool behaviors\nLightSet FanSet SwitchSet\nClimateSetMode Temperature FanMode\nTtsSay Default"]
     Tools["HA tool client\nreal / http / local"]
     MQTT["Z2MMqttListener"]
   end
@@ -51,6 +55,9 @@ flowchart LR
   API --> Decision
   API --> Vision
   API --> Orchestrator
+  Orchestrator --> Factory
+  Factory --> Plan
+  Plan --> Runner
 
   Router <--> Model
   Status <--> Model
@@ -58,14 +65,13 @@ flowchart LR
   Vision --> Camera
   Vision <--> Model
 
-  Orchestrator --> Runner
-  Runner --> Tools
+  Runner --> Registry
+  Registry --> Behavior
+  Behavior --> Tools
   Runner --> Jsonl
 
   Broker --> MQTT
   MQTT --> SQLite
-  MQTT --> Orchestrator
-  MQTT --> Runner
 
   State <--> SQLite
   Status --> SQLite

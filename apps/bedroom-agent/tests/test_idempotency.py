@@ -9,7 +9,7 @@ def test_tool_executor_idempotency_caches_result():
 
     call = ToolCall(
         tool="light.set",
-        args={"entity_id": "light.bedroom_lamp", "brightness_pct": 12, "transition_s": 0},
+        args={"entity_id": "light.bedlamp", "brightness_pct": 12, "transition_s": 0},
         idempotency_key="same-key",
         correlation_id="c1",
     )

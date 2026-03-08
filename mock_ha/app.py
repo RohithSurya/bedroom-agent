@@ -8,7 +8,9 @@ app = FastAPI(title="HA Mock")
 
 # In-memory "HA state"
 STATE: Dict[str, Any] = {
-    "lights": {"light.bedroom_lamp": {"brightness_pct": 100, "transition_s": 0}},
+    "lights": {"light.bedroom_light": {"state": "off"}},
+    "fans": {"fan.bedroom_fan": {"state": "off"}},
+    "switches": {},
     "tts": [],
 }
 
@@ -63,19 +65,56 @@ def tool_light_set(req: ToolRequest):
     if injected:
         return injected
 
-    entity_id = str(req.args.get("entity_id", "light.bedroom_lamp"))
-    brightness_pct = int(req.args.get("brightness_pct", 15))
-    transition_s = float(req.args.get("transition_s", 0))
+    entity_id = str(req.args.get("entity_id", "light.bedroom_light"))
+    state = str(req.args.get("state", "on")).lower()
+    if state not in ("on", "off"):
+        return {
+            "ok": False,
+            "tool": "light.set",
+            "details": {"error": "invalid_state", "state": state},
+        }
+
+    brightness_pct = None
+    if "brightness_pct" in req.args:
+        try:
+            brightness_pct = int(req.args.get("brightness_pct"))
+        except Exception:
+            return {
+                "ok": False,
+                "tool": "light.set",
+                "details": {
+                    "error": "invalid_brightness_pct",
+                    "brightness_pct": req.args.get("brightness_pct"),
+                },
+            }
+
+    transition_s = None
+    if "transition_s" in req.args:
+        try:
+            transition_s = float(req.args.get("transition_s"))
+        except Exception:
+            return {
+                "ok": False,
+                "tool": "light.set",
+                "details": {
+                    "error": "invalid_transition_s",
+                    "transition_s": req.args.get("transition_s"),
+                },
+            }
 
     STATE["lights"].setdefault(entity_id, {})
-    STATE["lights"][entity_id]["brightness_pct"] = brightness_pct
-    STATE["lights"][entity_id]["transition_s"] = transition_s
+    STATE["lights"][entity_id]["state"] = state
+    if brightness_pct is not None and state == "on":
+        STATE["lights"][entity_id]["brightness_pct"] = brightness_pct
+    if transition_s is not None:
+        STATE["lights"][entity_id]["transition_s"] = transition_s
 
     return {
         "ok": True,
         "tool": "light.set",
         "details": {
             "entity_id": entity_id,
+            "state": state,
             "brightness_pct": brightness_pct,
             "transition_s": transition_s,
         },
@@ -113,5 +152,29 @@ def tool_switch_set(req: ToolRequest):
     return {
         "ok": True,
         "tool": "switch.set",
+        "details": {"entity_id": entity_id, "state": state},
+    }
+
+
+@app.post("/tool/fan.set")
+def tool_fan_set(req: ToolRequest):
+    injected = maybe_fail("fan.set")
+    if injected:
+        return injected
+
+    entity_id = str(req.args.get("entity_id", "fan.bedroom_fan"))
+    state = str(req.args.get("state", "off")).lower()
+    if state not in ("on", "off"):
+        return {
+            "ok": False,
+            "tool": "fan.set",
+            "details": {"error": "invalid_state", "state": state},
+        }
+
+    STATE["fans"].setdefault(entity_id, {})
+    STATE["fans"][entity_id]["state"] = state
+    return {
+        "ok": True,
+        "tool": "fan.set",
         "details": {"entity_id": entity_id, "state": state},
     }

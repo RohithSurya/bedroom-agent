@@ -4,6 +4,7 @@ import requests
 
 from contracts.ha import ToolCall, ToolResult
 from core.idempotency import IdempotencyStore
+from requests.adapters import HTTPAdapter
 
 
 @dataclass
@@ -12,6 +13,17 @@ class HAToolClientHTTP:
     mode: str = "active"  # <-- ADD THIS
     timeout_s: float = 20
     idempotency: IdempotencyStore = field(default_factory=IdempotencyStore)
+    session: requests.Session | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self.base_url = self.base_url.rstrip("/")
+        if self.session is None:
+            self.session = requests.Session()
+
+            # optional: better pooling
+            adapter = HTTPAdapter(pool_connections=15, pool_maxsize=15, max_retries=0)
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
 
     def _url(self, path: str) -> str:
         return self.base_url.rstrip("/") + path
