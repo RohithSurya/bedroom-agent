@@ -47,15 +47,11 @@ class Orchestrator:
             cooldown_seconds = decision.cooldown_seconds
             actions: list[AgentAction] = []
 
-            if decision.decision == "allow" and cooldown_seconds > 0:
-                allowed, remaining = self.cooldowns.can_run(cooldown_key, cooldown_seconds)
-                if not allowed:
-                    decision = PolicyDecision(
-                        decision="deny",
-                        reason=f"cooldown_active:{remaining}s_remaining",
-                        cooldown_seconds=cooldown_seconds,
-                        safety_checks=[],
-                    )
+            decision = self._apply_cooldown(
+                cooldown_key=cooldown_key,
+                decision=decision,
+                include_safety_check=False,
+            )
 
             if decision.decision == "allow":
                 entity_id = self._resolve_light_entity_id(args=args, state=state)
@@ -91,15 +87,7 @@ class Orchestrator:
             cooldown_key = f"intent:fan_power:entity:{entity_id}"
             cooldown_seconds = decision.cooldown_seconds
 
-            if decision.decision == "allow" and cooldown_seconds > 0:
-                ok, remaining = self.cooldowns.can_run(cooldown_key, cooldown_seconds)
-                if not ok:
-                    decision = PolicyDecision(
-                        decision="deny",
-                        reason=f"cooldown_active:{remaining}s_remaining",
-                        cooldown_seconds=cooldown_seconds,
-                        safety_checks=decision.safety_checks + ["cooldown"],
-                    )
+            decision = self._apply_cooldown(cooldown_key=cooldown_key, decision=decision)
 
             if decision.decision == "allow":
                 actions.append(self.action_factory.fan(entity_id=entity_id, state=desired))
@@ -131,15 +119,7 @@ class Orchestrator:
             cooldown_key = "intent:enter_room:room:bedroom"
             cooldown_seconds = decision.cooldown_seconds
 
-            if decision.decision == "allow" and cooldown_seconds > 0:
-                ok, remaining = self.cooldowns.can_run(cooldown_key, cooldown_seconds)
-                if not ok:
-                    decision = PolicyDecision(
-                        decision="deny",
-                        reason=f"cooldown_active:{remaining}s_remaining",
-                        cooldown_seconds=cooldown_seconds,
-                        safety_checks=decision.safety_checks + ["cooldown"],
-                    )
+            decision = self._apply_cooldown(cooldown_key=cooldown_key, decision=decision)
 
             if decision.decision == "allow":
                 actions.append(self.action_factory.light(entity_id=entity_id, state="on"))
@@ -187,7 +167,6 @@ class Orchestrator:
 
         decision = self._apply_cooldown(
             cooldown_key=cooldown_key,
-            cooldown_seconds=cooldown_seconds,
             decision=decision,
         )
         if decision.decision == "allow":
@@ -227,7 +206,6 @@ class Orchestrator:
 
         decision = self._apply_cooldown(
             cooldown_key=cooldown_key,
-            cooldown_seconds=cooldown_seconds,
             decision=decision,
         )
         if decision.decision == "allow":
@@ -273,7 +251,6 @@ class Orchestrator:
 
         decision = self._apply_cooldown(
             cooldown_key=cooldown_key,
-            cooldown_seconds=cooldown_seconds,
             decision=decision,
         )
         if decision.decision == "allow":
@@ -296,7 +273,6 @@ class Orchestrator:
 
         decision = self._apply_cooldown(
             cooldown_key=cooldown_key,
-            cooldown_seconds=cooldown_seconds,
             decision=decision,
         )
 
@@ -339,19 +315,23 @@ class Orchestrator:
         self,
         *,
         cooldown_key: str,
-        cooldown_seconds: int,
         decision: PolicyDecision,
+        include_safety_check: bool = True,
     ) -> PolicyDecision:
+        cooldown_seconds = decision.cooldown_seconds
         if decision.decision != "allow" or cooldown_seconds <= 0:
             return decision
         allowed, remaining = self.cooldowns.can_run(cooldown_key, cooldown_seconds)
         if allowed:
             return decision
+        safety_checks = list(decision.safety_checks)
+        if include_safety_check:
+            safety_checks.append("cooldown")
         return PolicyDecision(
             decision="deny",
             reason=f"cooldown_active:{remaining}s_remaining",
             cooldown_seconds=cooldown_seconds,
-            safety_checks=decision.safety_checks + ["cooldown"],
+            safety_checks=safety_checks,
         )
 
     def _resolve_light_entity_id(self, *, args: dict[str, Any], state: dict[str, Any]) -> str:

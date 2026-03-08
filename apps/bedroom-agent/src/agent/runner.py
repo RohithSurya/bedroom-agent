@@ -29,6 +29,8 @@ class Runner:
     retry_attempts: int = 1  # v0 default
     tool_retry_policy: RetryPolicy = field(default_factory=lambda: RetryPolicy(max_attempts=1))
     tool_timeout_s: float = 8.0  # extra safety, especially for HTTP/HA
+    verification_settle_attempts: int = 5
+    verification_settle_delay_s: float = 0.2
     behavior_registry: ToolBehaviorRegistry = field(default_factory=ToolBehaviorRegistry)
     ha_breaker: CircuitBreaker = field(
         default_factory=lambda: CircuitBreaker(failure_threshold=3, recovery_timeout_s=10.0)
@@ -188,6 +190,34 @@ class Runner:
     def _verify(self, call: ToolCall, result: ToolResult) -> dict[str, Any]:
         return self._behavior_for(call).verify(self, call, result)
 
+    def _settle_verification(
+        self,
+        call: ToolCall,
+        result: ToolResult,
+        verify: dict[str, Any],
+        *,
+        behavior,
+        deadline: Deadline | None = None,
+    ) -> dict[str, Any]:
+        if verify.get("verified", False) or (not result.ok) or (not behavior.is_verification_critical(call)):
+            return verify
+
+        attempts = max(0, int(self.verification_settle_attempts))
+        settled = verify
+
+        for _ in range(attempts):
+            delay = float(self.verification_settle_delay_s)
+            if deadline is not None:
+                delay = min(delay, max(0.0, deadline.remaining() - 0.01))
+            if delay <= 0.0:
+                break
+            time.sleep(delay)
+            settled = self._verify(call, result)
+            if settled.get("verified", False):
+                break
+
+        return settled
+
     def execute_actions(
         self,
         *,
@@ -225,6 +255,13 @@ class Runner:
 
             # Verify + log
             verify = self._verify(call, result)
+            verify = self._settle_verification(
+                call,
+                result,
+                verify,
+                behavior=behavior,
+                deadline=deadline,
+            )
             self.logger.write(
                 correlation_id=correlation_id,
                 event_type="verification",
@@ -253,6 +290,13 @@ class Runner:
                         payload=r2.model_dump(),
                     )
                     v2 = self._verify(call, r2)
+                    v2 = self._settle_verification(
+                        call,
+                        r2,
+                        v2,
+                        behavior=behavior,
+                        deadline=deadline,
+                    )
                     self.logger.write(
                         correlation_id=correlation_id,
                         event_type="verification_retry",

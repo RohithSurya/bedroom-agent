@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agent.orchestrator import Orchestrator
+from core.cooldowns import CooldownStore
 
 
 def _base_state() -> dict:
@@ -110,3 +111,31 @@ def test_focus_start_accepts_light_entity_id_override():
 
     assert out["actions"][0].tool == "light.set"
     assert out["actions"][0].args["entity_id"] == "light.bedlamp"
+
+
+def test_night_mode_cooldown_omits_cooldown_safety_check():
+    orch = Orchestrator(cooldowns=CooldownStore())
+    state = {"presence": True, "guest_mode": False}
+
+    first = orch.handle_request(intent="night_mode", args={}, state=state)
+    orch.cooldowns.mark_ran(first["cooldown_key"], int(first["cooldown_seconds"]))
+
+    out = orch.handle_request(intent="night_mode", args={}, state=state)
+
+    assert out["decision"].decision == "deny"
+    assert out["decision"].reason.startswith("cooldown_active:")
+    assert "cooldown" not in out["decision"].safety_checks
+
+
+def test_fan_on_cooldown_adds_cooldown_safety_check():
+    orch = Orchestrator(cooldowns=CooldownStore())
+    state = _base_state()
+
+    first = orch.handle_request(intent="fan_on", args={}, state=state)
+    orch.cooldowns.mark_ran(first["cooldown_key"], int(first["cooldown_seconds"]))
+
+    out = orch.handle_request(intent="fan_on", args={}, state=state)
+
+    assert out["decision"].decision == "deny"
+    assert out["decision"].reason.startswith("cooldown_active:")
+    assert "cooldown" in out["decision"].safety_checks
