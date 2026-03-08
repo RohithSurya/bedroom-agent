@@ -210,7 +210,7 @@ def main() -> int:
     scenario_path = (
         Path(sys.argv[1])
         if len(sys.argv) > 1
-        else Path("evals/scenarios/night_mode_ab.yaml")
+        else Path("evals/scenarios/sleep_mode_ab.yaml")
     )
     scenario = _load_yaml(scenario_path)
 

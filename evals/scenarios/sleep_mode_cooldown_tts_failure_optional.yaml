@@ -1,4 +1,4 @@
-name: night_mode_cooldown_tts_failure_optional
+name: sleep_mode_cooldown_tts_failure_optional
 description: "Cooldown denial path with injected TTS failure (decide whether final_success should be false)"
 
 initial_state:
@@ -7,14 +7,14 @@ initial_state:
 
 steps:
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args: {}
     expect:
       decision: allow
       final_success: true
 
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args: {}
     failure_injection:
       - tool: tts.say

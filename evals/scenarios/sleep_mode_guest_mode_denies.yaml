@@ -1,5 +1,5 @@
-name: night_mode_guest_mode_denies
-description: "Guest mode ON denies night mode"
+name: sleep_mode_guest_mode_denies
+description: "Guest mode ON denies sleep mode"
 
 initial_state:
   presence: true
@@ -7,7 +7,7 @@ initial_state:
 
 steps:
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args: {}
     expect:
       decision: deny

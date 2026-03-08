@@ -61,7 +61,6 @@ class NLRouter:
                 "make the room ready for sleep",
                 "start sleep mode",
                 "sleep mode",
-                "night mode",
                 "help me wind down",
                 "wind down",
                 "bedtime",
@@ -129,7 +128,7 @@ class NLRouter:
             "Choose the single best intent from the allowed list and return JSON only.\n\n"
             "Allowed intents:\n"
             "- fan_on / fan_off\n"
-            "- sleep_mode: prepare the room for sleep; use this for 'night mode' style requests too\n"
+            "- sleep_mode: prepare the room for sleep or bedtime\n"
             "- focus_start / focus_end: start or end focus mode\n"
             "- comfort_adjust: cool the room or make it more comfortable\n"
             "- analyze_bedroom: run camera analysis for bed/desk/floor\n"

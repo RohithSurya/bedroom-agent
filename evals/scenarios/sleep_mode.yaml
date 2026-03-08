@@ -1,5 +1,5 @@
-name: night_mode_basic
-description: "Presence true + guest_mode false -> allow + dim lights + TTS"
+name: sleep_mode_basic
+description: "Presence true + guest_mode false -> allow + sleep actions + TTS"
 
 initial_state:
   presence: true
@@ -7,7 +7,7 @@ initial_state:
 
 steps:
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args: {}
     expect:
       decision: allow

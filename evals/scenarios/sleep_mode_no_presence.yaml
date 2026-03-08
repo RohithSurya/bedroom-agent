@@ -1,4 +1,4 @@
-name: night_mode_no_presence
+name: sleep_mode_no_presence
 description: "Presence false -> deny + TTS"
 
 initial_state:
@@ -7,7 +7,7 @@ initial_state:
 
 steps:
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args: {}
     expect:
       decision: deny

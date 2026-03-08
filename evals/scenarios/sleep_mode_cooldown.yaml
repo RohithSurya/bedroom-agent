@@ -1,5 +1,5 @@
-name: night_mode_cooldown
-description: "Call night_mode twice; second should be denied due to cooldown"
+name: sleep_mode_cooldown
+description: "Call sleep_mode twice; second should be denied due to cooldown"
 
 initial_state:
   presence: true
@@ -7,7 +7,7 @@ initial_state:
 
 steps:
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args: {}
     expect:
       decision: allow
@@ -16,7 +16,7 @@ steps:
         - tts.say
 
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args: {}
     expect:
       decision: deny

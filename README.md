@@ -584,9 +584,55 @@ Mermaid source files also live in `docs/`:
 - `docs/analyze_bedroom.mmd`
 - `docs/diagrams.md`
 
-## Quick Start
+## Setup and Run
 
-### Local Python
+### 1. Prerequisites
+
+- Python 3.10+
+- Docker and Docker Compose
+- An OpenAI-compatible model endpoint reachable at `LLM_BASE_URL`
+- For the full room automation stack: Home Assistant, MQTT, Zigbee2MQTT, and optionally a camera plus Wyoming STT/TTS
+
+### 2. Configure the agent
+
+```bash
+cp apps/bedroom-agent/.env.example apps/bedroom-agent/.env
+```
+
+Edit `apps/bedroom-agent/.env` and verify at least:
+
+- `AGENT_MODE=active` for real control, or `shadow` to dry-run without side effects
+- `TOOL_BACKEND=ha` for real Home Assistant, `local` for a standalone smoke test, and `http` only if you are running the mock service in `mock_ha/`
+- `HA_BASE_URL` and `HA_TOKEN`
+- `LLM_BASE_URL` and `LLM_MODEL`
+- `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, and `Z2M_PRESENCE_TOPIC`
+- `ENTRY_LIGHT_ENTITY_ID`, `BEDROOM_FAN_ENTITY_ID`, `BEDROOM_AC_ENTITY_ID`, and the other entity IDs so they match your Home Assistant names
+- `CAMERA_MODE`; if you are not using a live camera, set `CAMERA_MODE=file` and point `VISION_FALLBACK_IMAGE_PATH` to an existing image such as `./data/bedroom-latest.jpg`
+
+### 3. Start supporting services
+
+For the full stack from the repo root:
+
+```bash
+docker compose -f infra/home-automation/docker-compose.yaml up -d
+```
+
+Optional voice services:
+
+```bash
+docker compose -f wyoming/docker-compose.yaml up -d
+```
+
+Notes:
+
+- If you are only doing a standalone smoke test with `TOOL_BACKEND=local`, you can skip this step.
+- `infra/home-automation/docker-compose.yaml` uses `network_mode: host` and a hardcoded Zigbee serial device path. Update the `devices:` entry before starting Zigbee2MQTT on a new machine.
+- The LLM backend is not included in this repo. Start it separately and make sure `LLM_BASE_URL` is reachable from the agent.
+- Home Assistant rest commands in `infra/home-automation/ha_config/configuration.yaml` are currently pointed at `http://10.0.0.179:9000`. Change that to the actual host or IP running the agent before using voice control.
+
+### 4. Run the agent
+
+Local Python:
 
 ```bash
 cd apps/bedroom-agent
@@ -597,28 +643,54 @@ pip install -e ".[dev]"
 uvicorn src.app:app --host 0.0.0.0 --port 9000 --reload
 ```
 
-### Docker
+Docker:
 
 ```bash
-cd apps/bedroom-agent
-docker compose up --build
+docker compose -f apps/bedroom-agent/docker-compose.yml up --build -d
 ```
 
-The service listens on `http://localhost:9000`.
+The agent listens on `http://localhost:9000`.
+
+### 5. Smoke test
+
+```bash
+curl http://localhost:9000/health
+curl http://localhost:9000/readyz
+```
+
+`/health` should return `ok: true`. `/readyz` returns `503` until the configured HA, MQTT, LLM, and vision dependencies are reachable.
+
+Direct intent:
+
+```bash
+curl -X POST http://localhost:9000/agent/run \
+  -H 'Content-Type: application/json' \
+  -d '{"intent":"fan_on","args":{},"state":{"guest_mode":false}}'
+```
+
+Natural-language request:
+
+```bash
+curl -X POST http://localhost:9000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"start focus mode","state":{"guest_mode":false}}'
+```
 
 ## Core Configuration
 
-The agent reads settings from `apps/bedroom-agent/.env`. The most important variables are:
+The agent reads settings from `apps/bedroom-agent/.env`.
+
+Most important variables:
 
 - `AGENT_MODE`: `shadow` or `active`
 - `TOOL_BACKEND`: `local`, `http`, or `ha`
 - `HA_BASE_URL` and `HA_TOKEN`: Home Assistant API access
-- `LLM_BASE_URL` and `LLM_MODEL`: local model backend settings
-- `OPENAI_API_KEY`: optional for local OpenAI-compatible servers
+- `LLM_BASE_URL` and `LLM_MODEL`: OpenAI-compatible model backend settings
+- `OPENAI_API_KEY`: optional for hosted or local compatible servers that require auth
 - `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, `Z2M_PRESENCE_TOPIC`: Zigbee2MQTT integration
 - `CAMERA_MODE`, `CAMERA_DEVICE`, `VISION_FALLBACK_IMAGE_PATH`: image capture configuration
 
-For a full list, see `apps/bedroom-agent/src/core/config.py`.
+For the full settings list, see `apps/bedroom-agent/src/core/config.py`.
 
 ## Home Assistant Integration
 

@@ -180,6 +180,6 @@ if __name__ == "__main__":
     scenario_path = (
         Path(sys.argv[1])
         if len(sys.argv) > 1
-        else Path("evals/scenarios/night_mode.yaml")
+        else Path("evals/scenarios/sleep_mode.yaml")
     )
     raise SystemExit(run_scenario(scenario_path))

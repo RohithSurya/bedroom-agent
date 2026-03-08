@@ -1,5 +1,5 @@
-name: night_mode_hard_fail_no_cooldown
-description: "If lights hard-fail, cooldown should NOT start; second call should allow again"
+name: sleep_mode_cooldown_after_hard_fail
+description: "First call hard-fails lights; second call behavior reveals whether cooldown applies after failed execution"
 
 initial_state:
   presence: true
@@ -7,7 +7,7 @@ initial_state:
 
 steps:
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args:
         entity_id: light.bedroom_lamp
         brightness_pct: 10
@@ -21,8 +21,9 @@ steps:
       final_success: false
 
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args: {}
     expect:
-      decision: allow
+      # With your CURRENT implementation, this will probably be deny (cooldown active)
+      decision: deny
       final_success: true

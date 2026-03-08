@@ -1,4 +1,4 @@
-name: night_mode_idempotency
+name: sleep_mode_idempotency
 description: "Simulate retry of first tool call; second execution must be served from cache"
 
 initial_state:
@@ -7,7 +7,7 @@ initial_state:
 
 steps:
   - request:
-      intent: night_mode
+      intent: sleep_mode
       args:
         entity_id: light.bedroom_lamp
         brightness_pct: 10
