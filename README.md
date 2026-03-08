@@ -582,7 +582,6 @@ Mermaid source files also live in `docs/`:
 - `docs/mqtt_entry_flow.mmd`
 - `docs/data_architecture.mmd`
 - `docs/analyze_bedroom.mmd`
-- `docs/night_mode.mmd`
 - `docs/diagrams.md`
 
 ## Quick Start

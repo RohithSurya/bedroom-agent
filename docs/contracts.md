@@ -39,7 +39,6 @@ Request body:
 
 Allowed `intent` values:
 
-- `night_mode`
 - `fan_on`
 - `fan_off`
 - `enter_room`
@@ -100,7 +99,6 @@ Request body:
 
 Possible routed intents:
 
-- `night_mode`
 - `fan_on`
 - `fan_off`
 - `sleep_mode`

@@ -12,7 +12,6 @@ These Mermaid sources describe the current implementation, not the earlier conce
 ## Request and Action Flows
 
 - `voice_chat_flow.mmd`: end-to-end Assist to `/agent/chat` flow
-- `night_mode.mmd`: direct `night_mode` execution through `/agent/run`
 - `mqtt_entry_flow.mmd`: door and presence sensor flow into automatic entry and vacancy actions
 - `analyze_bedroom.mmd`: camera capture and room-analysis path
 

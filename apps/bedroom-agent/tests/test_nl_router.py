@@ -23,6 +23,9 @@ def test_router_maps_explicit_mode_prompts_directly():
     intent, _ = router.route(text="Make the room ready for sleep", state={})
     assert intent == "sleep_mode"
 
+    intent, _ = router.route(text="Start night mode", state={})
+    assert intent == "sleep_mode"
+
     intent, _ = router.route(text="Set the room up for focus", state={})
     assert intent == "focus_start"
 

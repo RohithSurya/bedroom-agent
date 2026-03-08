@@ -8,7 +8,6 @@ from llm.base import LLMClient
 
 
 AllowedIntent = Literal[
-    "night_mode",
     "fan_on",
     "fan_off",
     "sleep_mode",
@@ -50,8 +49,6 @@ class NLRouter:
         t = (text or "").strip().lower()
 
         # Fast deterministic shortcuts (keeps latency low and reduces LLM calls)
-        if "night mode" in t or (t.startswith("night") and "mode" in t):
-            return "night_mode", {}
         if "fan" in t and ("on" in t or "start" in t):
             return "fan_on", {}
         if "fan" in t and ("off" in t or "stop" in t):
@@ -64,6 +61,7 @@ class NLRouter:
                 "make the room ready for sleep",
                 "start sleep mode",
                 "sleep mode",
+                "night mode",
                 "help me wind down",
                 "wind down",
                 "bedtime",
@@ -128,9 +126,8 @@ class NLRouter:
             "You are a router for a bedroom automation agent. "
             "Choose the single best intent from the allowed list and return JSON only.\n\n"
             "Allowed intents:\n"
-            "- night_mode: dim lights + announce\n"
             "- fan_on / fan_off\n"
-            "- sleep_mode: prepare the room for sleep\n"
+            "- sleep_mode: prepare the room for sleep; use this for 'night mode' style requests too\n"
             "- focus_start / focus_end: start or end focus mode\n"
             "- comfort_adjust: cool the room or make it more comfortable\n"
             "- analyze_bedroom: run camera analysis for bed/desk/floor\n"

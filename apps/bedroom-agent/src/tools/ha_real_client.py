@@ -123,7 +123,7 @@ class HAToolClientReal:
             return ToolResult(ok=True, tool="shadow_mode", details={"note": "shadow_mode"})
         tool = call.tool
 
-        # lights-only night mode
+        # Generic light entity control
         if tool == "light.set":
             entity_id = str(call.args.get("entity_id"))
             payload: Dict[str, Any] = {"entity_id": entity_id}

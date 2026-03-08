@@ -19,7 +19,6 @@ This package is the runtime core of the repo. It exposes HTTP endpoints for dire
 
 Direct execution intents accepted by `/agent/run`:
 
-- `night_mode`
 - `fan_on`
 - `fan_off`
 - `enter_room`

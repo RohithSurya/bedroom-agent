@@ -239,10 +239,9 @@ class Runner:
         for call in actions:
             behavior = self._behavior_for(call)
 
-            # Skip "success" TTS if lights already failed (we'll speak fallback later)
+            # Suppress the plan's normal spoken confirmation if lights already failed.
             if call.tool == "tts.say":
-                msg = str(call.args.get("message", ""))
-                if ("Night mode on" in msg or "Lights dimmed" in msg) and (not light_ok):
+                if not light_ok:
                     continue
 
             # Execute + log
@@ -315,11 +314,11 @@ class Runner:
                         }
                     )
 
-        # Graceful degradation: if lights failed, speak fallback message
+        # Graceful degradation: if lights failed, speak fallback message.
         if not light_ok:
             fallback = ToolCall(
                 tool="tts.say",
-                args={"message": "Night mode: I couldn't dim the lights right now."},
+                args={"message": "I couldn't change the lights right now."},
                 idempotency_key=new_idempotency_key(),
                 correlation_id=correlation_id,
             )

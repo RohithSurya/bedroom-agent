@@ -12,23 +12,6 @@ def _deny(reason: str, *checks: str) -> PolicyDecision:
     )
 
 
-def evaluate_night_mode(state: dict) -> PolicyDecision:
-    # v0: lights-only
-    if state.get("guest_mode", False):
-        return _deny("guest_mode_on", "guest_mode_off")
-
-    if not state.get("presence", False):
-        return _deny("presence_required", "presence_required")
-
-    # Lights-only cooldown (prevents repeated triggers)
-    return PolicyDecision(
-        decision="allow",
-        reason="ok",
-        cooldown_seconds=60,
-        safety_checks=["guest_mode_off", "presence_required"],
-    )
-
-
 def evaluate_fan_power(state: dict) -> PolicyDecision:
     if state.get("guest_mode", False):
         return _deny("guest_mode_on", "guest_mode_off")

@@ -32,7 +32,6 @@ from reliability.deadline import Deadline
 
 class AgentRunRequest(BaseModel):
     intent: Literal[
-        "night_mode",
         "fan_on",
         "fan_off",
         "enter_room",
@@ -171,7 +170,7 @@ class AgentAppState:
             if self.settings.HUMIDITY_SENSOR_ENTITY_ID:
                 ids.add(self.settings.HUMIDITY_SENSOR_ENTITY_ID)
 
-        # Fan/light generally don’t need pre-reads for fan_on/off/night_mode/enter_room
+        # Fan/light generally don’t need pre-reads for fan_on/off/enter_room
         return ids
 
     @staticmethod

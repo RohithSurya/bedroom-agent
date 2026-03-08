@@ -10,12 +10,10 @@ DECISION_INTENTS: tuple[str, ...] = (
     "comfort_adjust",
     "fan_on",
     "fan_off",
-    "night_mode",
     "no_action",
 )
 
 ROUTER_INTENTS: tuple[str, ...] = (
-    "night_mode",
     "fan_on",
     "fan_off",
     "sleep_mode",

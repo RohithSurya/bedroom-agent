@@ -9,6 +9,6 @@ def test_contracts_validate():
     assert d.decision == "allow"
 
     tc = ToolCall(
-        tool="light.set_scene", args={"scene": "night_dim"}, idempotency_key="k", correlation_id="c"
+        tool="light.set_scene", args={"scene": "sleep_dim"}, idempotency_key="k", correlation_id="c"
     )
     assert tc.tool == "light.set_scene"

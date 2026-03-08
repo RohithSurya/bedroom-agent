@@ -34,14 +34,14 @@ def test_runner_emits_fallback_tts_on_light_failure(tmp_path):
 
     orch = Orchestrator()
     out = orch.handle_request(
-        intent="night_mode", args={}, state={"presence": True, "guest_mode": False}
+        intent="sleep_mode", args={}, state={"presence": True, "guest_mode": False}
     )
 
     runner = Runner(executor=ex, logger=logger, retry_attempts=1)
     run_out = runner.execute_actions(correlation_id=out["correlation_id"], actions=out["actions"])
 
     assert run_out["success"] is False
-    assert any("couldn't dim the lights" in msg.lower() for msg in ex.device_state["tts"])
+    assert any("couldn't change the lights" in msg.lower() for msg in ex.device_state["tts"])
 
 
 def test_runner_verifies_climate_actions(tmp_path):
@@ -73,7 +73,7 @@ def test_runner_waits_for_light_state_to_settle(tmp_path):
 
     orch = Orchestrator()
     out = orch.handle_request(
-        intent="night_mode", args={}, state={"presence": True, "guest_mode": False}
+        intent="sleep_mode", args={}, state={"presence": True, "guest_mode": False}
     )
 
     runner = Runner(
@@ -87,7 +87,7 @@ def test_runner_waits_for_light_state_to_settle(tmp_path):
 
     assert run_out["success"] is True
     assert ex.device_state["lights"]["light.bedroom_light"]["state"] == "off"
-    assert not any("couldn't dim the lights" in msg.lower() for msg in ex.device_state["tts"])
+    assert not any("couldn't change the lights" in msg.lower() for msg in ex.device_state["tts"])
 
 
 def test_runner_marks_failure_on_fan_failure(tmp_path):

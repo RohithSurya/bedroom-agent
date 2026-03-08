@@ -89,8 +89,6 @@
             Turning on the fan.
           {% elif intent == 'fan_off' %}
             Turning off the fan.
-          {% elif intent == 'night_mode' %}
-            Starting night mode.
           {% elif intent == 'no_action' %}
             No action needed.
           {% else %}

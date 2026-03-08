@@ -12,7 +12,6 @@ from agent.policies import (
     evaluate_fan_power,
     evaluate_focus_end,
     evaluate_focus_start,
-    evaluate_night_mode,
     evaluate_sleep_mode,
 )
 from core.cooldowns import CooldownStore
@@ -38,42 +37,6 @@ class Orchestrator:
                 "actions": [],
                 "cooldown_key": None,
                 "cooldown_seconds": 0,
-            }
-
-        # ---------- night_mode ----------
-        if intent == "night_mode":
-            cooldown_key = f"intent:{intent}:room:bedroom"
-            decision = evaluate_night_mode(state)
-            cooldown_seconds = decision.cooldown_seconds
-            actions: list[AgentAction] = []
-
-            decision = self._apply_cooldown(
-                cooldown_key=cooldown_key,
-                decision=decision,
-                include_safety_check=False,
-            )
-
-            if decision.decision == "allow":
-                entity_id = self._resolve_light_entity_id(args=args, state=state)
-                actions.append(
-                    self.action_factory.light(entity_id=entity_id, state="off")
-                )
-                actions.append(
-                    self.action_factory.speech(message="Night mode on. Lights dimmed.")
-                )
-            else:
-                actions.append(
-                    self.action_factory.speech(
-                        message=f"Night mode blocked: {_humanize_reason(decision.reason)}"
-                    )
-                )
-
-            return {
-                "correlation_id": cid,
-                "decision": decision,
-                "actions": self._materialize_actions(cid, actions),
-                "cooldown_seconds": cooldown_seconds,
-                "cooldown_key": cooldown_key,
             }
 
         # ---------- fan_on / fan_off ----------
