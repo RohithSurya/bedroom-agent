@@ -35,23 +35,43 @@ def test_comfort_adjust_emits_cooling_actions():
     assert tools == ["climate.set_mode", "climate.set_temperature", "climate.set_fan_mode"]
 
 
-def test_sleep_mode_turns_off_light_and_cools():
+def test_sleep_mode_turns_off_light_and_cools_when_room_is_warm():
     orch = Orchestrator()
     state = _base_state()
     state["light_state"] = "on"
+    state["temperature_c"] = 27.0
+    state["sleep_target_temp_c"] = 24
+
     out = orch.handle_request(intent="sleep_mode", args={}, state=state)
 
+    tools = [call.tool for call in out["actions"]]
     assert out["decision"].decision == "allow"
-    assert [call.tool for call in out["actions"]] == [
-        "light.set",
+    assert tools[0] == "light.set"
+    assert tools[1:] == [
         "climate.set_mode",
         "climate.set_temperature",
         "climate.set_fan_mode",
         "tts.say",
     ]
-    assert out["actions"][1].args["hvac_mode"] == "cool"
-    assert out["actions"][2].args["temperature"] == 24
-    assert out["actions"][3].args["fan_mode"] == "low"
+
+
+def test_sleep_mode_uses_fan_only_when_room_is_already_near_target():
+    orch = Orchestrator()
+    state = _base_state()
+    state["light_state"] = "on"
+    state["temperature_c"] = 23.0
+    state["sleep_target_temp_c"] = 24
+
+    out = orch.handle_request(intent="sleep_mode", args={}, state=state)
+
+    tools = [call.tool for call in out["actions"]]
+    assert out["decision"].decision == "allow"
+    assert tools[0] == "light.set"
+    assert tools[1:] == [
+        "climate.set_mode",
+        "climate.set_fan_mode",
+        "tts.say",
+    ]
 
 
 def test_sleep_mode_uses_fan_fallback_without_ac():

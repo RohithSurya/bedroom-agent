@@ -132,34 +132,72 @@ class Orchestrator:
             cooldown_key=cooldown_key,
             decision=decision,
         )
+
         if decision.decision == "allow":
             light_entity_id = self._resolve_light_entity_id(args=args, state=state)
             if str(state.get("light_state", "")).lower() != "off":
                 actions.append(self.action_factory.light(entity_id=light_entity_id, state="off"))
 
-            if bool(state.get("sleep_mode_enable_climate")) and bool(state.get("ac_available")):
+            ac_available = bool(state.get("ac_available"))
+            sleep_mode_enable_climate = bool(state.get("sleep_mode_enable_climate"))
+            comfort_use_fan_fallback = bool(state.get("comfort_use_fan_fallback"))
+            temperature_c = state.get("temperature_c")
+            sleep_target_temp_c = int(state.get("sleep_target_temp_c", 24))
+            ac_entity_id = str(state.get("ac_entity_id", "climate.bedroom_ac"))
+            fan_entity_id = str(state.get("fan_entity_id", "fan.bedroom_fan"))
+
+            should_cool = (
+                ac_available
+                and sleep_mode_enable_climate
+                and isinstance(temperature_c, (int, float))
+                and float(temperature_c) > float(sleep_target_temp_c)
+            )
+
+            if should_cool:
                 actions.append(
                     self.action_factory.climate(
-                        entity_id=str(state.get("ac_entity_id", "climate.bedroom_ac")),
+                        entity_id=ac_entity_id,
                         hvac_mode="cool",
-                        temperature=int(
-                            state.get(
-                                "sleep_target_temp_c",
-                                state.get("comfort_target_temp_c", 24),
-                            )
-                        ),
+                        temperature=sleep_target_temp_c,
                         fan_mode="low",
                     )
                 )
-            elif bool(state.get("comfort_use_fan_fallback")):
+                actions.append(
+                    self.action_factory.speech(
+                        message=f"Sleep mode on. Turning off the light and cooling to {sleep_target_temp_c}C."
+                    )
+                )
+            elif ac_available and sleep_mode_enable_climate:
+                actions.append(
+                    self.action_factory.climate(
+                        entity_id=ac_entity_id,
+                        hvac_mode="fan_only",
+                        temperature=None,
+                        fan_mode="low",
+                    )
+                )
+                actions.append(
+                    self.action_factory.speech(
+                        message="Sleep mode on. Turning off the light and keeping the room gentle with low fan."
+                    )
+                )
+            elif comfort_use_fan_fallback:
                 actions.append(
                     self.action_factory.fan(
-                        entity_id=str(state.get("fan_entity_id", "fan.bedroom_fan")),
+                        entity_id=fan_entity_id,
                         state="on",
                     )
                 )
+                actions.append(
+                    self.action_factory.speech(
+                        message="Sleep mode on. Turning off the light and using fan fallback."
+                    )
+                )
+            else:
+                actions.append(
+                    self.action_factory.speech(message="Sleep mode on. Turning off the light.")
+                )
 
-            actions.append(self.action_factory.speech(message="Sleep mode on."))
         return {
             "correlation_id": cid,
             "decision": decision,
