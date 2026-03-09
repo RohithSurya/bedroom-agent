@@ -5,13 +5,15 @@ Deployed on Jetson nano super.
 
 **Totally offline system deployed on [Jetson Orin Nano Super](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/nano-super-developer-kit/)**
 
-The project is split into three pieces:
+The project is split into four pieces:
 
-`apps/bedroom-agent`: the FastAPI service that routes requests, evaluates policy, executes tools, listens to MQTT, and stores memory/logs
+- `apps/bedroom-agent`: the FastAPI service that routes requests, evaluates policy, executes tools, listens to MQTT, and stores memory/logs
 
-`infra/home-automation/ha_config`: Home Assistant configuration that exposes the agent to Assist and scripts
+- `infra/home-automation/ha_config`: Home Assistant configuration that exposes the agent to Assist and scripts
 
-`wyoming`: speech-to-text using fast-whisper. Text to speech using piper.
+- `wyoming`: speech-to-text using fast-whisper. Text to speech using piper.
+
+- `Ministral 3B Instruct`: Quantized LLM running using llama.cpp (CUDA optimized)
 
 
 **LLM Stack**
