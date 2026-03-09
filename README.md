@@ -94,15 +94,6 @@ flowchart LR
 
 Door/presence Zigbee sensor flow is broken out separately in the sensor diagram below.
 
-Other details reflected in the updated diagrams:
-
-- Voice ingress is `Assist -> HA automation/script -> rest_command.bedroom_agent_chat|bedroom_agent_run -> FastAPI`.
-- Sensor ingress is `door/mmWave sensor -> Zigbee coordinator -> Zigbee2MQTT or MQTT broker -> Z2MMqttListener -> SQLite beliefs`.
-- Vision ingress is `BedroomImageSource -> BedroomRoomAnalyzer -> optional LLM -> vision namespace`.
-- Action planning is `Orchestrator -> ActionFactory -> ToolCall plan -> Runner`.
-- Execution safety now explicitly shows `ToolBehaviorRegistry`, verification, retries, deadlines, circuit breaking, and JSONL logging.
-- Local persistence now explicitly shows SQLite namespaces for `belief`, `prefs`, `episodes`, `decision`, `status`, and `vision`.
-
 Very detailed app component view:
 
 ```mermaid
