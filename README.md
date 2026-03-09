@@ -116,6 +116,7 @@ flowchart LR
     Camera["BedroomImageSource\nfswebcam / HA snapshot / file"]
     Model["LLM provider\nOllama or Mistral API"]
     Whisper["Wyoming / faster-whisper"]
+    Piper["Wyoming / piper-tts"]
   end
 
   User --> Assist
@@ -158,6 +159,8 @@ flowchart LR
   Vision --> SQLite
   API --> SQLite
   HAApi --> Speak
+  Speak -. text-to-speech .-> Piper
+  Piper -. spoken response .-> User
 ```
 
 Door/presence Zigbee sensor flow is broken out separately in the sensor diagram below.

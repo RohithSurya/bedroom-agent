@@ -9,7 +9,6 @@ from reliability.retry import RetryPolicy
 
 from contracts.ha import ToolCall, ToolResult
 from core.cooldowns import CooldownStore
-from core.ids import new_idempotency_key
 from core.logging_jsonl import JsonlLogger
 from tools.tool_executor import ToolExecutor
 from reliability.circuit_breaker import CircuitBreaker
