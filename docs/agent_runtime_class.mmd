@@ -1,8 +1,50 @@
 classDiagram
     class AgentAppState {
-        +build_runtime_state(extra_state, intent) dict
+        +settings: Settings
+        +cooldowns: CooldownStore
+        +logger: JsonlLogger
+        +kv: SqliteKV
+        +memory: TieredMemory
+        +preference_feedback: PreferenceFeedback
+        +router: NLRouter
+        +status_service: StatusService
+        +room_analyzer: BedroomRoomAnalyzer
+        +decision_engine: DecisionEngine
         +orchestrator: Orchestrator
         +runner: Runner
+        +mqtt: Z2MMqttListener
+        +build_runtime_state(extra_state, intent, user_text) dict
+        +record_episode(user_text, intent, state, decision, actions, execution, memory_hits) dict
+    }
+
+    class Settings
+    class CooldownStore
+    class JsonlLogger
+    class SqliteKV
+    class TieredMemory {
+        +get_relevant_preferences(intent, user_text, defaults) dict
+        +get_recent_episodes(limit) list~dict~
+        +get_rolling_summary() str
+        +record_episode(episode) dict
+    }
+    class PreferenceFeedback {
+        +apply(user_text, last_episode) dict_or_none
+    }
+    class NLRouter {
+        +route(text, state) tuple
+    }
+    class StatusService {
+        +handle_query(query, runtime_state) dict
+    }
+    class BedroomRoomAnalyzer {
+        +analyze(query) dict
+    }
+    class DecisionEngine {
+        +choose_intent(source, trigger, user_text, state) DecisionChoice
+    }
+    class Z2MMqttListener {
+        +start() None
+        +stop() None
     }
 
     class Orchestrator {
@@ -58,10 +100,19 @@ classDiagram
     }
 
     class Runner {
+        +executor: tool backend client
+        +cooldowns: CooldownStore
+        +logger: JsonlLogger
+        +tool_retry_policy: RetryPolicy
+        +ha_breaker: CircuitBreaker
+        +behavior_registry: ToolBehaviorRegistry
         +execute_actions(correlation_id, actions, cooldown_key, cooldown_seconds, deadline) dict
         +read_entity_state(entity_id) dict
-        +behavior_registry: ToolBehaviorRegistry
     }
+
+    class RetryPolicy
+    class CircuitBreaker
+    class Deadline
 
     class ToolBehaviorRegistry {
         +for_call(call) ToolBehavior
@@ -91,11 +142,13 @@ classDiagram
 
     class HAToolClientHTTP {
         +execute(call) ToolResult
+        +get_state() dict
     }
 
     class HAToolClientReal {
         +execute(call) ToolResult
         +read_entity_state(entity_id) dict
+        +prime_tts(message) None
     }
 
     class ToolResult {
@@ -104,9 +157,21 @@ classDiagram
         +details: dict
     }
 
+    AgentAppState --> Settings
+    AgentAppState --> CooldownStore
+    AgentAppState --> JsonlLogger
+    AgentAppState --> SqliteKV
+    AgentAppState --> TieredMemory
+    AgentAppState --> PreferenceFeedback
+    AgentAppState --> NLRouter
+    AgentAppState --> StatusService
+    AgentAppState --> BedroomRoomAnalyzer
+    AgentAppState --> DecisionEngine
     AgentAppState --> Orchestrator
     AgentAppState --> Runner
+    AgentAppState --> Z2MMqttListener
 
+    Orchestrator --> CooldownStore
     Orchestrator --> ActionFactory
     ActionFactory --> AgentAction
     LightAction ..|> AgentAction
@@ -116,6 +181,11 @@ classDiagram
 
     AgentAction --> ToolCall
 
+    Runner --> CooldownStore
+    Runner --> JsonlLogger
+    Runner --> RetryPolicy
+    Runner --> CircuitBreaker
+    Runner --> Deadline
     Runner --> ToolBehaviorRegistry
     ToolBehaviorRegistry --> ToolBehavior
     BaseToolBehavior ..|> ToolBehavior

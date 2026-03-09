@@ -3,8 +3,9 @@ sequenceDiagram
   participant Assist as HA Assist
   participant Auto as HA conversation automation
   participant API as /agent/chat
-  participant State as Runtime state builder
   participant Router as NLRouter
+  participant Feedback as PreferenceFeedback
+  participant State as Runtime state builder
   participant Status as StatusService
   participant Vision as BedroomRoomAnalyzer
   participant Decide as DecisionEngine
@@ -15,58 +16,69 @@ sequenceDiagram
   participant Behavior as ToolBehavior
   participant Tool as HA tool client
   participant HAApi as HA service API
+  participant DB as SQLite
 
   User->>Assist: "Start focus mode"
   Assist->>Auto: matched catch-all conversation trigger
   Auto->>API: POST /agent/chat
-  API->>State: build_runtime_state()
-  State-->>API: runtime state
-  API->>Router: route(text, state)
+  API->>Router: route(text, state={})
+  Router-->>API: intent + args
+  API->>Feedback: apply(user_text, last_episode)
 
-  alt intent=status
-    Router-->>API: status
-    API->>Status: handle_query()
-    Status-->>API: mode=info result
-  else intent=analyze_bedroom
-    Router-->>API: analyze_bedroom
-    API->>Vision: analyze()
-    Vision-->>API: mode=info result
-  else intent=decision_request
-    Router-->>API: decision_request
-    API->>Decide: choose_intent()
-    Decide-->>API: chosen_intent + rationale
-    API->>Orch: handle_request(chosen_intent)
-    Orch->>Factory: build AgentAction objects
-    Factory-->>Orch: typed actions
-    Orch-->>API: policy + actions
-    API->>Run: execute_actions()
-    loop each ToolCall
-      Run->>Registry: for_call(call)
-      Registry-->>Run: ToolBehavior
-      Run->>Tool: execute(call)
-      Tool->>HAApi: service/state API
-      HAApi-->>Tool: response
-      Tool-->>Run: ToolResult
-      Run->>Behavior: verify(call, result)
+  alt feedback matched
+    Feedback->>DB: update prefs + append feedback event
+    Feedback-->>API: memory_update payload
+  else continue with runtime flow
+    API->>State: build_runtime_state(intent, user_text)
+    State-->>API: runtime state
+
+    alt intent=status
+      API->>Status: handle_query(query, runtime_state)
+      Status->>DB: set status.last_summary + append status event
+      Status-->>API: mode=info result
+    else intent=analyze_bedroom
+      API->>Vision: analyze(query)
+      Vision->>DB: set vision.latest_bedroom_analysis or append failure event
+      Vision-->>API: mode=info result
+    else intent=decision_request
+      API->>Decide: choose_intent()
+      Decide-->>API: chosen_intent + rationale + trace
+      API->>DB: set decision.last_choice and decision.last_trace
+      API->>Orch: handle_request(chosen_intent)
+      Orch->>Factory: build AgentAction objects
+      Factory-->>Orch: typed actions
+      Orch-->>API: policy + actions
+      API->>Run: execute_actions()
+      loop each ToolCall
+        Run->>Registry: for_call(call)
+        Registry-->>Run: ToolBehavior
+        Run->>Tool: execute(call)
+        Tool->>HAApi: service/state API
+        HAApi-->>Tool: response
+        Tool-->>Run: ToolResult
+        Run->>Behavior: verify(call, result)
+      end
+      Run-->>API: execution
+      API->>DB: record episode + append llm decision events
+    else routed action intent
+      API->>DB: set decision.last_choice and decision.last_trace
+      API->>Orch: handle_request(intent)
+      Orch->>Factory: build AgentAction objects
+      Factory-->>Orch: typed actions
+      Orch-->>API: policy + actions
+      API->>Run: execute_actions()
+      loop each ToolCall
+        Run->>Registry: for_call(call)
+        Registry-->>Run: ToolBehavior
+        Run->>Tool: execute(call)
+        Tool->>HAApi: service/state API
+        HAApi-->>Tool: response
+        Tool-->>Run: ToolResult
+        Run->>Behavior: verify(call, result)
+      end
+      Run-->>API: execution
+      API->>DB: record episode
     end
-    Run-->>API: execution
-  else routed action intent
-    Router-->>API: focus_start / sleep_mode / fan_on ...
-    API->>Orch: handle_request(intent)
-    Orch->>Factory: build AgentAction objects
-    Factory-->>Orch: typed actions
-    Orch-->>API: policy + actions
-    API->>Run: execute_actions()
-    loop each ToolCall
-      Run->>Registry: for_call(call)
-      Registry-->>Run: ToolBehavior
-      Run->>Tool: execute(call)
-      Tool->>HAApi: service/state API
-      HAApi-->>Tool: response
-      Tool-->>Run: ToolResult
-      Run->>Behavior: verify(call, result)
-    end
-    Run-->>API: execution
   end
 
   API-->>Auto: JSON response

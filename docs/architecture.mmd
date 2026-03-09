@@ -28,15 +28,17 @@ flowchart LR
   end
 
   subgraph Storage["Local state + logs"]
-    SQLite["SQLite memory\nbelief / prefs / vision / status / events"]
+    SQLite["SQLite memory\nbelief / prefs / vision /\ndecision / episodes / status / events"]
     Jsonl["JSONL log\nlogs/events.jsonl"]
   end
 
   subgraph Inputs["External inputs"]
-    Broker["MQTT broker / Zigbee2MQTT"]
+    Z2M["Zigbee2MQTT"]
+    Broker["MQTT broker"]
     Camera["BedroomImageSource\nfswebcam / HA snapshot / file"]
-    Model["LLM provider\nOllama or Mistral API"]
-    Whisper["Wyoming / faster-whisper"]
+    Model["OpenAI-compatible LLM\nllama.cpp / Ollama / hosted API"]
+    Whisper["Wyoming faster-whisper"]
+    Piper["Wyoming Piper / tts.piper"]
   end
 
   User --> Assist
@@ -46,7 +48,7 @@ flowchart LR
   Rest --> API
 
   API --> State
-  State --> Tools
+  State --> Runner
   Tools <--> HAApi
   HAApi <--> Entities
 
@@ -67,10 +69,14 @@ flowchart LR
 
   Runner --> Registry
   Registry --> Behavior
-  Behavior --> Tools
+  Behavior --> Runner
+  Runner --> Tools
   Runner --> Jsonl
 
+  Z2M --> Broker
   Broker --> MQTT
+  MQTT --> Orchestrator
+  MQTT --> Runner
   MQTT --> SQLite
 
   State <--> SQLite
@@ -78,4 +84,5 @@ flowchart LR
   Decision --> SQLite
   Vision --> SQLite
   API --> SQLite
+  HAApi --> Piper
   HAApi --> Speak

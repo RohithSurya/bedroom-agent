@@ -15,10 +15,11 @@ flowchart LR
 
   subgraph VoiceStack["wyoming/docker-compose.yaml"]
     Whisper["faster-whisper\nWyoming STT"]
+    Piper["wyoming-piper\nWyoming TTS"]
   end
 
   subgraph External["External or host-level services"]
-    LLM["LLM backend\nOllama :11434 or Mistral API"]
+    LLM["OpenAI-compatible LLM\nllama.cpp :8081 or hosted API"]
     Broadlink["Broadlink RM4 Mini"]
     HomePod["HomePod Gen2"]
     Zigbee["Zigbee devices\nsensor + switch mesh"]
@@ -30,6 +31,7 @@ flowchart LR
   HA -->|TTS / media playback| HomePod
 
   HA -->|Assist pipeline / STT| Whisper
+  HA -->|tts.speak| Piper
 
   HA -->|REST commands\n/agent/run /agent/chat| Agent
   Agent -->|HA state + service API| HA

@@ -1,38 +1,63 @@
 flowchart TD
   subgraph Inputs["Input streams"]
-    Voice["Voice or HTTP request"]
-    EntityReads["Live Home Assistant entity reads"]
-    MqttEvents["MQTT door / presence payloads"]
-    Images["Bedroom snapshots"]
+    Voice["Voice, webhook, or HTTP request"]
+    EntityReads["Live Home Assistant entity reads\nlight climate fan temp humidity"]
+    MqttEvents["MQTT door / presence / distance payloads"]
+    Images["Bedroom snapshots\ncamera device, HA snapshot, or file"]
   end
 
-  subgraph Memory["SQLite memory.sqlite"]
-    Belief["belief namespace\npresence door_open last_door_open_ts"]
-    Prefs["prefs namespace\nguest_mode and user toggles"]
+  subgraph Memory["SQLite data/memory.sqlite"]
+    Belief["belief namespace\npresence door_open target_distance\nlast_door_open_ts last_enter_trigger_ts\nlast_presence_false_ts"]
+    Prefs["prefs namespace\nguest_mode\nsleep.* focus.* comfort.*"]
     VisionState["vision namespace\nlatest_bedroom_analysis"]
+    DecisionState["decision namespace\nlast_choice last_trace"]
+    Episodes["episodes namespace\nlast recent rolling_summary"]
     StatusState["status namespace\nlast_summary"]
     Events["events table\nappend-only typed events"]
   end
 
   subgraph Runtime["Runtime context"]
+    Tiered["TieredMemory\nrelevant prefs + episode summary"]
     StatePacket["build_runtime_state()\nstate packet for routing and policy"]
-    Services["Router / StatusService /\nDecisionEngine / Orchestrator"]
+    Services["NLRouter / StatusService /\nDecisionEngine / Orchestrator"]
+    VisionSvc["BedroomRoomAnalyzer"]
+    Feedback["PreferenceFeedback"]
+    EpisodesWriter["record_episode()"]
   end
 
   Logs["logs/events.jsonl\ncorrelation-based execution log"]
 
   MqttEvents --> Belief
   MqttEvents --> Events
-  Images --> VisionState
-  Images --> Events
+  Images --> VisionSvc
+  VisionSvc --> VisionState
+  VisionSvc --> Events
 
-  Belief --> StatePacket
-  Prefs --> StatePacket
-  VisionState --> StatePacket
   EntityReads --> StatePacket
   Voice --> StatePacket
+  Belief --> StatePacket
+  Prefs --> Tiered
+  Episodes --> Tiered
+  Tiered --> StatePacket
+  VisionState --> StatePacket
 
   StatePacket --> Services
+  Voice --> Services
+  Belief --> Services
+  Prefs --> Services
+  DecisionState --> Services
+  Episodes --> Services
+  Events --> Services
+
+  Services --> VisionSvc
+  Services --> Feedback
+  Services --> DecisionState
   Services --> StatusState
   Services --> Events
   Services --> Logs
+  Services --> EpisodesWriter
+
+  Feedback --> Prefs
+  Feedback --> Events
+  EpisodesWriter --> Episodes
+  EpisodesWriter --> Events

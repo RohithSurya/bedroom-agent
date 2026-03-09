@@ -14,7 +14,8 @@ flowchart LR
 
   subgraph Control["Bridges and control plane"]
     ZBT2["Home Assistant Connect ZBT-2\nZigbee coordinator"]
-    Z2M["Zigbee2MQTT + MQTT broker"]
+    Z2M["Zigbee2MQTT"]
+    Broker["Mosquitto MQTT broker"]
     HA["Home Assistant"]
     SmartIR["SmartIR climate entity\nclimate.bedroom_ac"]
     Broadlink["Broadlink RM4 Mini\nIR blaster"]
@@ -34,8 +35,9 @@ flowchart LR
   LightSwitch <-->|Zigbee switch control| ZBT2
 
   ZBT2 --> Z2M
-  Z2M -->|MQTT events| Jetson
-  Z2M -->|entity updates| HA
+  Z2M -->|publish telemetry| Broker
+  Broker -->|MQTT events| Jetson
+  Broker -->|entity updates| HA
 
   Jetson -->|REST tool requests| HA
   HA -->|entity state API| Jetson
@@ -44,5 +46,6 @@ flowchart LR
   SmartIR --> Broadlink
   Broadlink -->|IR commands| AC
 
-  HA -->|switch service calls| Z2M
+  HA -->|device control via MQTT entities| Broker
+  Broker --> Z2M
   Z2M --> ZBT2

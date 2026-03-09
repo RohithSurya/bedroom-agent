@@ -10,52 +10,98 @@ High-level system map:
 
 ```mermaid
 flowchart LR
-    subgraph Inputs[User Inputs and Room Signals]
-        User[User or API client]
-        Voice[Voice webhook or chat UI]
-        Door[Zigbee door sensor]
-        Presence[Zigbee mmWave presence sensor]
-        Camera[Bedroom camera or fallback image]
-    end
+  User["User"]
 
-    subgraph SensorInfra[Sensor Transport]
-        Hub[Zigbee hub or coordinator]
-        Z2M[Zigbee2MQTT]
-        Broker[MQTT broker]
-    end
+  subgraph Voice["Voice + Home Assistant"]
+    Assist["Assist / conversation trigger"]
+    Automation["HA automations + scripts"]
+    Rest["rest_command\nbedroom_agent_chat / bedroom_agent_run"]
+    HAApi["Home Assistant service + state API"]
+    Entities["HA entities\nlight fan climate sensors"]
+    Speak["script.bedroom_agent_speak"]
+  end
 
-    subgraph App[bedroom-agent FastAPI app]
-        API[HTTP endpoints]
-        MQTTListener[MQTT listener and automation callbacks]
-        Runtime[Routing, policy, and execution]
-        Vision[Bedroom vision analysis]
-        Memory[SQLite memory and JSONL logs]
-    end
+  subgraph Agent["bedroom-agent FastAPI service"]
+    API["FastAPI app\n/health /agent/run /agent/chat"]
+    State["Runtime state builder"]
+    Router["NLRouter"]
+    Status["StatusService"]
+    Decision["DecisionEngine"]
+    Vision["BedroomRoomAnalyzer"]
+    Orchestrator["Orchestrator"]
+    Factory["ActionFactory\nLightAction FanAction\nSpeechAction ClimatePlan"]
+    Plan["ToolCall plan\nstable executor boundary"]
+    Runner["Runner"]
+    Registry["ToolBehaviorRegistry"]
+    Behavior["Tool behaviors\nLightSet FanSet SwitchSet\nClimateSetMode Temperature FanMode\nTtsSay Default"]
+    Tools["HA tool client\nreal / http / local"]
+    MQTT["Z2MMqttListener"]
+  end
 
-    subgraph Integrations[Integrations]
-        LLM[OpenAI-compatible LLM]
-        Tools[Tool backend]
-        HA[Home Assistant devices]
-    end
+  subgraph Storage["Local state + logs"]
+    SQLite["SQLite memory\nbelief / prefs / vision / status / events"]
+    Jsonl["JSONL log\nlogs/events.jsonl"]
+  end
 
-    User --> API
-    Voice --> API
-    Door --> Hub
-    Presence --> Hub
-    Hub --> Z2M
-    Z2M --> Broker
-    Broker --> MQTTListener
-    MQTTListener --> Runtime
-    MQTTListener --> Memory
-    Camera --> Vision
-    API --> Runtime
-    Runtime <--> Memory
-    Runtime --> Vision
-    Runtime --> LLM
-    Vision --> LLM
-    Runtime --> Tools
-    Tools --> HA
+  subgraph Inputs["External inputs"]
+    Broker["MQTT broker / Zigbee2MQTT"]
+    Camera["BedroomImageSource\nfswebcam / HA snapshot / file"]
+    Model["LLM provider\nOllama or Mistral API"]
+    Whisper["Wyoming / faster-whisper"]
+  end
+
+  User --> Assist
+  Whisper -. speech-to-text .-> Assist
+  Assist --> Automation
+  Automation --> Rest
+  Rest --> API
+
+  API --> State
+  State --> Tools
+  Tools <--> HAApi
+  HAApi <--> Entities
+
+  API --> Router
+  API --> Status
+  API --> Decision
+  API --> Vision
+  API --> Orchestrator
+  Orchestrator --> Factory
+  Factory --> Plan
+  Plan --> Runner
+
+  Router <--> Model
+  Status <--> Model
+  Decision <--> Model
+  Vision --> Camera
+  Vision <--> Model
+
+  Runner --> Registry
+  Registry --> Behavior
+  Behavior --> Tools
+  Runner --> Jsonl
+
+  Broker --> MQTT
+  MQTT --> SQLite
+
+  State <--> SQLite
+  Status --> SQLite
+  Decision --> SQLite
+  Vision --> SQLite
+  API --> SQLite
+  HAApi --> Speak
 ```
+
+Door/presence Zigbee sensor flow is broken out separately in the sensor diagram below.
+
+Other details reflected in the updated diagrams:
+
+- Voice ingress is `Assist -> HA automation/script -> rest_command.bedroom_agent_chat|bedroom_agent_run -> FastAPI`.
+- Sensor ingress is `door/mmWave sensor -> Zigbee coordinator -> Zigbee2MQTT or MQTT broker -> Z2MMqttListener -> SQLite beliefs`.
+- Vision ingress is `BedroomImageSource -> BedroomRoomAnalyzer -> optional LLM -> vision namespace`.
+- Action planning is `Orchestrator -> ActionFactory -> ToolCall plan -> Runner`.
+- Execution safety now explicitly shows `ToolBehaviorRegistry`, verification, retries, deadlines, circuit breaking, and JSONL logging.
+- Local persistence now explicitly shows SQLite namespaces for `belief`, `prefs`, `episodes`, `decision`, `status`, and `vision`.
 
 Very detailed app component view:
 
@@ -237,6 +283,74 @@ flowchart LR
     KV --> DecisionNS
     KV --> StatusNS
     KV --> VisionNS
+```
+
+### Data Architecture
+
+```mermaid
+flowchart TD
+  subgraph Inputs["Input streams"]
+    Voice["Voice, webhook, or HTTP request"]
+    EntityReads["Live Home Assistant entity reads\nlight climate fan temp humidity"]
+    MqttEvents["MQTT door / presence / distance payloads"]
+    Images["Bedroom snapshots\ncamera device, HA snapshot, or file"]
+  end
+
+  subgraph Memory["SQLite data/memory.sqlite"]
+    Belief["belief namespace\npresence door_open target_distance\nlast_door_open_ts last_enter_trigger_ts\nlast_presence_false_ts"]
+    Prefs["prefs namespace\nguest_mode\nsleep.* focus.* comfort.*"]
+    VisionState["vision namespace\nlatest_bedroom_analysis"]
+    DecisionState["decision namespace\nlast_choice last_trace"]
+    Episodes["episodes namespace\nlast recent rolling_summary"]
+    StatusState["status namespace\nlast_summary"]
+    Events["events table\nappend-only typed events"]
+  end
+
+  subgraph Runtime["Runtime context"]
+    Tiered["TieredMemory\nrelevant prefs + episode summary"]
+    StatePacket["build_runtime_state()\nstate packet for routing and policy"]
+    Services["NLRouter / StatusService /\nDecisionEngine / Orchestrator"]
+    VisionSvc["BedroomRoomAnalyzer"]
+    Feedback["PreferenceFeedback"]
+    EpisodesWriter["record_episode()"]
+  end
+
+  Logs["logs/events.jsonl\ncorrelation-based execution log"]
+
+  MqttEvents --> Belief
+  MqttEvents --> Events
+  Images --> VisionSvc
+  VisionSvc --> VisionState
+  VisionSvc --> Events
+
+  EntityReads --> StatePacket
+  Voice --> StatePacket
+  Belief --> StatePacket
+  Prefs --> Tiered
+  Episodes --> Tiered
+  Tiered --> StatePacket
+  VisionState --> StatePacket
+
+  StatePacket --> Services
+  Voice --> Services
+  Belief --> Services
+  Prefs --> Services
+  DecisionState --> Services
+  Episodes --> Services
+  Events --> Services
+
+  Services --> VisionSvc
+  Services --> Feedback
+  Services --> DecisionState
+  Services --> StatusState
+  Services --> Events
+  Services --> Logs
+  Services --> EpisodesWriter
+
+  Feedback --> Prefs
+  Feedback --> Events
+  EpisodesWriter --> Episodes
+  EpisodesWriter --> Events
 ```
 
 ### Sample Bedroom Image
