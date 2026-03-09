@@ -1,6 +1,6 @@
-# bedroom-agent
+# EdgeAgent (aka bedroom-agent)
 
-EdgeAgentOS (aka bedroom-agent) is a local-first embodied AI system for personalized room intelligence—combining multimodal perception, memory, and policy-gated action to safely control a real environment on edge hardware.
+EdgeAgent (aka bedroom-agent) is a local-first embodied AI system for personalized room intelligence—combining multimodal perception, memory, and policy-gated action to safely control a real environment on edge hardware.
 Deployed on Jetson nano super.
 
 **Totally offline system deployed on [Jetson Orin Nano Super](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/nano-super-developer-kit/)**
