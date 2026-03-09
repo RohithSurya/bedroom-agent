@@ -1,6 +1,72 @@
 # bedroom-agent
 
-Local-first bedroom automation stack centered on a FastAPI agent. The agent keeps tool execution deterministic, uses lightweight SQLite memory, listens to MQTT occupancy signals, and can optionally call an OpenAI-compatible LLM for routing, explanation, decision support, and bedroom image analysis.
+EdgeAgentOS (aka bedroom-agent) is a local-first embodied AI system for personalized room intelligence—combining multimodal perception, memory, and policy-gated action to safely control a real environment on edge hardware.
+Deployed on Jetson nano super.
+
+**Totally offline system deployed on [Jetson Orin Nano Super](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/nano-super-developer-kit/)**
+
+The project is split into three pieces:
+
+`apps/bedroom-agent`: the FastAPI service that routes requests, evaluates policy, executes tools, listens to MQTT, and stores memory/logs
+
+`infra/home-automation/ha_config`: Home Assistant configuration that exposes the agent to Assist and scripts
+
+`wyoming`: speech-to-text using fast-whisper. Text to speech using piper.
+
+
+**LLM Stack**
+
+- This project uses [Ministral 3B Instruct (2512)](https://docs.mistral.ai/models/ministral-3-3b-25-12) as the core LLM.
+
+- Because the system runs on a Jetson Orin Nano Super with 8GB memory, the model is deployed in a [4-bit quantized GGUF](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF) format to fit within edge-device resource limits.
+
+- The model is served locally using llama.cpp as a system service, with CUDA acceleration enabled on the Jetson for faster inference.
+
+- To stay within the device’s memory and latency constraints, the model runs with a reduced context window of 2048 tokens and uses GPU layer offloading (`-ngl`) so computation is shared across the CPU and GPU.
+
+**Optimization Notes**
+- TensorRT-based optimization was explored to further improve performance and quantization efficiency.
+
+- However, because this project uses a multimodal vision + text workflow, TensorRT would require handling the vision and language components separately.
+
+- On an 8GB edge device, that split pipeline introduced too much complexity and was not practical for the current system design.
+
+- For that reason, llama.cpp with CUDA offloading was chosen as the most feasible and reliable deployment path for this version of the project.
+
+
+**Services running for the project**
+- Bedroom-agent microservice (Brain of the project)
+- [ministral-3b-2512](https://docs.mistral.ai/models/ministral-3-3b-25-12) LLM model
+- Zigbee2MQTT
+- Mosquitto (Message queue)
+- Home assistant
+- Wyoming (For speech to text)
+- Piper (For text to speech)
+
+
+**Hardware + ecosystem**
+
+**Compute**
+
+- **NVIDIA Jetson Orin Nano 8GB**
+
+**Sensors + control**
+
+- **Camera** -> to feed photos to the local Ministral model backend
+- **mmWave presence sensor** (Zigbee) → presence/occupancy belief state
+- **Zigbee smart plug** → bedside lamp + power telemetry use-cases
+- **Home Assistant Connect ZBT-2** (Zigbee coordinator, run in **Zigbee mode** for v1.0)
+- **Broadlink RM4 Mini (IR blaster)** → controls **Vissani window AC**
+- **Home Assistant + SmartIR climate entity** → reliable HVAC abstraction
+- **HomePod Gen2** → TTS output + temp/humidity sensor (as available in Home ecosystem)
+- **Door Sensor** → For tracking door in and out events and also used for presence tracking
+- **Temperature and Humidity Sensor** → Monitors the temperature and humidity of the room. Adjusting comfort mode based on temperature and humidity.
+- **Switch bot** → Switch bot to control dome light in the room. Making a dumb light into a smart one.
+
+**Voice control path (locked Option 1)**
+
+- **HomePod Siri → Apple Home Scene → Home Assistant → LLM/Agent → HomePod speaks**
+- **Homeassistant assist** → Works with voice assist with Tony open wake word (Using apple shortcuts). Relays commands to `/agent/chat` making it a seamless experience.
 
 ## Visual Overview
 
@@ -608,4 +674,4 @@ From `apps/bedroom-agent`:
 
 ## More Detail
 
-Service-specific docs are in [apps/bedroom-agent/README.md](/home/rosurya/bedroom-agent/apps/bedroom-agent/README.md).
+Service-specific docs are in [apps/bedroom-agent/README.md](/apps/bedroom-agent/README.md).
