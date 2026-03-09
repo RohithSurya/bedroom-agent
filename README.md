@@ -1,634 +1,29 @@
-# Demo YouTube URL: https://youtu.be/oJxBTXyXbbU.
-
 # bedroom-agent
 
-Edge-Native Autonomous Intelligence using LLM centric logic that control the entities of the room. 
-Totally offline system deployed on Jetson Orin Nano Super
+Local-first bedroom automation stack centered on a FastAPI agent. The agent keeps tool execution deterministic, uses lightweight SQLite memory, listens to MQTT occupancy signals, and can optionally call an OpenAI-compatible LLM for routing, explanation, decision support, and bedroom image analysis.
 
-The project is split into three pieces:
+## Repository Layout
 
-- `apps/bedroom-agent`: the FastAPI service that routes requests, evaluates policy, executes tools, listens to MQTT, and stores memory/logs
-- `infra/home-automation/ha_config`: Home Assistant configuration that exposes the agent to Assist and scripts
-- `wyoming`: speech-to-text container configuration for a local Assist pipeline
+- `apps/bedroom-agent`: main FastAPI service, agent logic, memory, tests, Docker config
+- `infra/home-automation`: Home Assistant and related deployment assets
+- `mock_ha`: lightweight mock Home Assistant service for local integration work
+- `wyoming`: local speech-to-text container config
+- `evals`: evaluation scenarios and harnesses
 
-## What It Does
+## Current Behavior
 
-- Accepts direct intent requests such as `fan_on`, `sleep_mode`, or `focus_start`
-- Accepts natural language requests through `/agent/chat`
-- Uses deterministic orchestration for safety-critical actions
-- Uses SQLite for beliefs, preferences, recent room analysis, and event memory
-- Writes append-only JSONL logs for replay and debugging
-- Supports room analysis from a bedroom camera snapshot
-- Integrates with Home Assistant for voice, climate, fan, lights, and TTS
+- Direct action endpoint: `POST /agent/run`
+- Natural-language endpoint: `POST /agent/chat`
+- Readiness and liveness: `GET /health`, `GET /readyz`
+- Deterministic orchestration for `fan_on`, `fan_off`, `enter_room`, `sleep_mode`, `focus_start`, `focus_end`, `comfort_adjust`, and `no_action`
+- Natural-language routing for `status`, `analyze_bedroom`, and `decision_request`
+- SQLite-backed beliefs, preferences, decision traces, recent episodes, and cached vision analysis
+- Sleep preference feedback from follow-up chat such as "too cold" or "warmer next time"
+- Optional bedroom snapshot analysis using a local or remote OpenAI-compatible model endpoint
 
+## Quick Start
 
-## Hardware + ecosystem (locked)
-
-**Compute**
-
-- **NVIDIA Jetson Orin Nano 8GB**
-
-**Sensors + control**
-
-- **Camera** -> to feed photos to the local Ministral model backend
-- **mmWave presence sensor** (Zigbee) → presence/occupancy belief state
-- **Zigbee smart plug** → bedside lamp + power telemetry use-cases
-- **Home Assistant Connect ZBT-2** (Zigbee coordinator, run in **Zigbee mode** for v1.0)
-- **Broadlink RM4 Mini (IR blaster)** → controls **Vissani window AC**
-- **Home Assistant + SmartIR climate entity** → reliable HVAC abstraction
-- **HomePod Gen2** → TTS output + temp/humidity sensor (as available in Home ecosystem)
-
-**Voice control path (locked Option 1)**
-
-- **HomePod Siri → Apple Home Scene → Home Assistant → LLM/Agent → HomePod speaks**
-
-### Sample Camera Photo
-
-![Sample bedroom camera photo](apps/bedroom-agent/data/bedroom-latest.jpg)
-
-This is a representative frame from the bedroom camera used by the vision path. A typical snapshot includes the bed, desk and monitor, chair, closet area, dresser, and mirror, and may also include a person in the room. The agent uses frames like this for `analyze bedroom` requests and for any vision-assisted room-state reasoning.
-
-### Physical Components and Integration Diagram
-
-```mermaid
-flowchart LR
-  User["User"]
-
-  subgraph Room["Bedroom physical components"]
-    HomePod["HomePod Gen2\nvoice in + TTS out"]
-    Camera["USB camera\nroom snapshots"]
-    Presence["mmWave presence sensor\nZigbee"]
-    Door["Bedroom door sensor\nZigbee"]
-    TempHum["Temp / humidity sensor\nHA entity"]
-    Fan["Bedroom fan\nfan.bedroom_fan"]
-    LightSwitch["Bedroom light\nlight.bedroom_light"]
-    AC["Vissani window AC"]
-  end
-
-  subgraph Control["Bridges and control plane"]
-    ZBT2["Home Assistant Connect ZBT-2\nZigbee coordinator"]
-    Z2M["Zigbee2MQTT + MQTT broker"]
-    HA["Home Assistant"]
-    SmartIR["SmartIR climate entity\nclimate.bedroom_ac"]
-    Broadlink["Broadlink RM4 Mini\nIR blaster"]
-    Jetson["Jetson Orin Nano\nbedroom-agent + model runtime"]
-  end
-
-  User --> HomePod
-  HomePod -->|voice request| HA
-  HA -->|TTS playback| HomePod
-
-  Camera -->|image capture| Jetson
-
-  Presence -->|Zigbee telemetry| ZBT2
-  Door -->|Zigbee telemetry| ZBT2
-  TempHum -->|sensor state| HA
-  Fan <-->|Zigbee control via fan entity| ZBT2
-  LightSwitch <-->|Zigbee switch control| ZBT2
-
-  ZBT2 --> Z2M
-  Z2M -->|MQTT events| Jetson
-  Z2M -->|entity updates| HA
-
-  Jetson -->|REST tool requests| HA
-  HA -->|entity state API| Jetson
-
-  HA --> SmartIR
-  SmartIR --> Broadlink
-  Broadlink -->|IR commands| AC
-
-  HA -->|switch service calls| Z2M
-  Z2M --> ZBT2
-```
-
-### Container and Service Interaction Diagram
-
-```mermaid
-flowchart LR
-  subgraph UserLayer["User and client layer"]
-    User["User / HomePod Siri"]
-  end
-
-  subgraph HAStack["infra/home-automation/docker-compose.yaml"]
-    HA["homeassistant\nhost network\n:8123"]
-    MQTT["mosquitto\nhost network\n:1883"]
-    Z2M["zigbee2mqtt\nhost network"]
-  end
-
-  subgraph AgentStack["apps/bedroom-agent/docker-compose.yml"]
-    Agent["bedroom-agent\nFastAPI\n:9000"]
-  end
-
-  subgraph VoiceStack["wyoming/docker-compose.yaml"]
-    Whisper["faster-whisper\nWyoming STT"]
-  end
-
-  subgraph External["External or host-level services"]
-    LLM["LLM backend\nOllama :11434 or Mistral API"]
-    Broadlink["Broadlink RM4 Mini"]
-    HomePod["HomePod Gen2"]
-    Zigbee["Zigbee devices\nsensor + switch mesh"]
-    Camera["USB camera / video device"]
-  end
-
-  User --> HomePod
-  HomePod -->|voice request| HA
-  HA -->|TTS / media playback| HomePod
-
-  HA -->|Assist pipeline / STT| Whisper
-
-  HA -->|REST commands\n/agent/run /agent/chat| Agent
-  Agent -->|HA state + service API| HA
-
-  Agent -->|MQTT subscribe\npresence + door topics| MQTT
-  Z2M -->|publish telemetry| MQTT
-  MQTT -->|MQTT discovery + entity updates| HA
-
-  Z2M -->|USB serial / Zigbee radio| Zigbee
-  HA -->|device control via MQTT entities| MQTT
-
-  Agent -->|generate / structured output| LLM
-  Agent -->|capture snapshots| Camera
-
-  HA -->|SmartIR climate control| Broadlink
-```
-
-
-## Architecture
-
-At runtime the agent looks like this:
-
-1. Home Assistant or a caller sends `POST /agent/run` or `POST /agent/chat`.
-2. The app builds a runtime state from Home Assistant entities plus stored beliefs and preferences.
-3. `NLRouter` maps text to a high-level intent.
-4. `Orchestrator` uses `ActionFactory` to compose typed actions and materializes them into `ToolCall` objects.
-5. `Runner` resolves each `ToolCall` through `ToolBehaviorRegistry`, then executes, verifies, cools down, and logs results.
-6. MQTT listeners update occupancy and door beliefs continuously in the background.
-7. Optional vision analysis captures a bedroom image and asks the configured LLM/VLM for structured output.
-
-### System Architecture Diagram
-
-```mermaid
-flowchart LR
-  User["User"]
-
-  subgraph Voice["Voice + Home Assistant"]
-    Assist["Assist / conversation trigger"]
-    Automation["HA automations + scripts"]
-    Rest["rest_command\nbedroom_agent_chat / bedroom_agent_run"]
-    HAApi["Home Assistant service + state API"]
-    Entities["HA entities\nlight fan climate sensors"]
-    Speak["script.bedroom_agent_speak"]
-  end
-
-  subgraph Agent["bedroom-agent FastAPI service"]
-    API["FastAPI app\n/health /agent/run /agent/chat"]
-    State["Runtime state builder"]
-    Router["NLRouter"]
-    Status["StatusService"]
-    Decision["DecisionEngine"]
-    Vision["BedroomRoomAnalyzer"]
-    Orchestrator["Orchestrator"]
-    Factory["ActionFactory\nLightAction FanAction\nSpeechAction ClimatePlan"]
-    Plan["ToolCall plan\nstable executor boundary"]
-    Runner["Runner"]
-    Registry["ToolBehaviorRegistry"]
-    Behavior["Tool behaviors\nLightSet FanSet SwitchSet\nClimateSetMode Temperature FanMode\nTtsSay Default"]
-    Tools["HA tool client\nreal / http / local"]
-    MQTT["Z2MMqttListener"]
-  end
-
-  subgraph Storage["Local state + logs"]
-    SQLite["SQLite memory\nbelief / prefs / vision / status / events"]
-    Jsonl["JSONL log\nlogs/events.jsonl"]
-  end
-
-  subgraph Inputs["External inputs"]
-    Broker["MQTT broker / Zigbee2MQTT"]
-    Camera["BedroomImageSource\nfswebcam / HA snapshot / file"]
-    Model["LLM provider\nOllama or Mistral API"]
-    Whisper["Wyoming / faster-whisper"]
-  end
-
-  User --> Assist
-  Whisper -. speech-to-text .-> Assist
-  Assist --> Automation
-  Automation --> Rest
-  Rest --> API
-
-  API --> State
-  State --> Tools
-  Tools <--> HAApi
-  HAApi <--> Entities
-
-  API --> Router
-  API --> Status
-  API --> Decision
-  API --> Vision
-  API --> Orchestrator
-  Orchestrator --> Factory
-  Factory --> Plan
-  Plan --> Runner
-
-  Router <--> Model
-  Status <--> Model
-  Decision <--> Model
-  Vision --> Camera
-  Vision <--> Model
-
-  Runner --> Registry
-  Registry --> Behavior
-  Behavior --> Tools
-  Runner --> Jsonl
-
-  Broker --> MQTT
-  MQTT --> SQLite
-
-  State <--> SQLite
-  Status --> SQLite
-  Decision --> SQLite
-  Vision --> SQLite
-  API --> SQLite
-  HAApi --> Speak
-```
-
-### Internal Runtime Class Diagram
-
-```mermaid
-classDiagram
-    class AgentAppState {
-        +build_runtime_state(extra_state, intent) dict
-        +orchestrator: Orchestrator
-        +runner: Runner
-    }
-
-    class Orchestrator {
-        +handle_request(intent, args, state) dict
-        +action_factory: ActionFactory
-        -_resolve_light_entity_id(args, state) str
-        -_materialize_actions(correlation_id, actions) list~ToolCall~
-    }
-
-    class ActionFactory {
-        +light(entity_id, state) LightAction
-        +fan(entity_id, state) FanAction
-        +speech(message) SpeechAction
-        +climate(entity_id, hvac_mode, temperature, fan_mode) ClimatePlan
-    }
-
-    class AgentAction {
-        <<interface>>
-        +to_tool_calls(correlation_id) list~ToolCall~
-    }
-
-    class LightAction {
-        +entity_id: str
-        +state: str
-        +to_tool_calls(correlation_id) list~ToolCall~
-    }
-
-    class FanAction {
-        +entity_id: str
-        +state: str
-        +to_tool_calls(correlation_id) list~ToolCall~
-    }
-
-    class SpeechAction {
-        +message: str
-        +to_tool_calls(correlation_id) list~ToolCall~
-    }
-
-    class ClimatePlan {
-        +entity_id: str
-        +hvac_mode: str
-        +temperature: int?
-        +fan_mode: str?
-        +to_tool_calls(correlation_id) list~ToolCall~
-    }
-
-    class ToolCall {
-        +tool: str
-        +args: dict
-        +idempotency_key: str
-        +correlation_id: str
-        +timeout_s: float?
-    }
-
-    class Runner {
-        +execute_actions(correlation_id, actions, cooldown_key, cooldown_seconds, deadline) dict
-        +read_entity_state(entity_id) dict
-        +behavior_registry: ToolBehaviorRegistry
-    }
-
-    class ToolBehaviorRegistry {
-        +for_call(call) ToolBehavior
-    }
-
-    class ToolBehavior {
-        <<interface>>
-        +is_retryable(call) bool
-        +verify(runner, call, result) dict
-        +is_verification_critical(call) bool
-    }
-
-    class BaseToolBehavior
-    class LightSetBehavior
-    class FanSetBehavior
-    class SwitchSetBehavior
-    class ClimateSetModeBehavior
-    class ClimateSetTemperatureBehavior
-    class ClimateSetFanModeBehavior
-    class TtsSayBehavior
-    class DefaultToolBehavior
-
-    class ToolExecutor {
-        +execute(call) ToolResult
-        +get_state() dict
-    }
-
-    class HAToolClientHTTP {
-        +execute(call) ToolResult
-    }
-
-    class HAToolClientReal {
-        +execute(call) ToolResult
-        +read_entity_state(entity_id) dict
-    }
-
-    class ToolResult {
-        +ok: bool
-        +tool: str
-        +details: dict
-    }
-
-    AgentAppState --> Orchestrator
-    AgentAppState --> Runner
-
-    Orchestrator --> ActionFactory
-    ActionFactory --> AgentAction
-    LightAction ..|> AgentAction
-    FanAction ..|> AgentAction
-    SpeechAction ..|> AgentAction
-    ClimatePlan ..|> AgentAction
-
-    AgentAction --> ToolCall
-
-    Runner --> ToolBehaviorRegistry
-    ToolBehaviorRegistry --> ToolBehavior
-    BaseToolBehavior ..|> ToolBehavior
-    LightSetBehavior --|> BaseToolBehavior
-    FanSetBehavior --|> BaseToolBehavior
-    SwitchSetBehavior --|> BaseToolBehavior
-    ClimateSetModeBehavior --|> BaseToolBehavior
-    ClimateSetTemperatureBehavior --|> BaseToolBehavior
-    ClimateSetFanModeBehavior --|> BaseToolBehavior
-    TtsSayBehavior --|> BaseToolBehavior
-    DefaultToolBehavior --|> BaseToolBehavior
-
-    Runner --> ToolCall
-    Runner --> ToolResult
-    Runner --> ToolExecutor
-    Runner --> HAToolClientHTTP
-    Runner --> HAToolClientReal
-```
-
-### Data Architecture Diagram
-
-```mermaid
-flowchart TD
-  subgraph Inputs["Input streams"]
-    Voice["Voice or HTTP request"]
-    EntityReads["Live Home Assistant entity reads"]
-    MqttEvents["MQTT door / presence payloads"]
-    Images["Bedroom snapshots"]
-  end
-
-  subgraph Memory["SQLite memory.sqlite"]
-    Belief["belief namespace\npresence door_open last_door_open_ts"]
-    Prefs["prefs namespace\nguest_mode and user toggles"]
-    VisionState["vision namespace\nlatest_bedroom_analysis"]
-    StatusState["status namespace\nlast_summary"]
-    Events["events table\nappend-only typed events"]
-  end
-
-  subgraph Runtime["Runtime context"]
-    StatePacket["build_runtime_state()\nstate packet for routing and policy"]
-    Services["Router / StatusService /\nDecisionEngine / Orchestrator"]
-  end
-
-  Logs["logs/events.jsonl\ncorrelation-based execution log"]
-
-  MqttEvents --> Belief
-  MqttEvents --> Events
-  Images --> VisionState
-  Images --> Events
-
-  Belief --> StatePacket
-  Prefs --> StatePacket
-  VisionState --> StatePacket
-  EntityReads --> StatePacket
-  Voice --> StatePacket
-
-  StatePacket --> Services
-  Services --> StatusState
-  Services --> Events
-  Services --> Logs
-```
-
-### Voice Chat Flow Diagram
-
-```mermaid
-sequenceDiagram
-  actor User
-  participant Assist as HA Assist
-  participant Auto as HA conversation automation
-  participant API as /agent/chat
-  participant State as Runtime state builder
-  participant Router as NLRouter
-  participant Status as StatusService
-  participant Vision as BedroomRoomAnalyzer
-  participant Decide as DecisionEngine
-  participant Orch as Orchestrator
-  participant Factory as ActionFactory
-  participant Run as Runner
-  participant Registry as ToolBehaviorRegistry
-  participant Behavior as ToolBehavior
-  participant Tool as HA tool client
-  participant HAApi as HA service API
-
-  User->>Assist: "Start focus mode"
-  Assist->>Auto: matched catch-all conversation trigger
-  Auto->>API: POST /agent/chat
-  API->>State: build_runtime_state()
-  State-->>API: runtime state
-  API->>Router: route(text, state)
-
-  alt intent=status
-    Router-->>API: status
-    API->>Status: handle_query()
-    Status-->>API: mode=info result
-  else intent=analyze_bedroom
-    Router-->>API: analyze_bedroom
-    API->>Vision: analyze()
-    Vision-->>API: mode=info result
-  else intent=decision_request
-    Router-->>API: decision_request
-    API->>Decide: choose_intent()
-    Decide-->>API: chosen_intent + rationale
-    API->>Orch: handle_request(chosen_intent)
-    Orch->>Factory: build AgentAction objects
-    Factory-->>Orch: typed actions
-    Orch-->>API: policy + actions
-    API->>Run: execute_actions()
-    loop each ToolCall
-      Run->>Registry: for_call(call)
-      Registry-->>Run: ToolBehavior
-      Run->>Tool: execute(call)
-      Tool->>HAApi: service/state API
-      HAApi-->>Tool: response
-      Tool-->>Run: ToolResult
-      Run->>Behavior: verify(call, result)
-    end
-    Run-->>API: execution
-  else routed action intent
-    Router-->>API: focus_start / sleep_mode / fan_on ...
-    API->>Orch: handle_request(intent)
-    Orch->>Factory: build AgentAction objects
-    Factory-->>Orch: typed actions
-    Orch-->>API: policy + actions
-    API->>Run: execute_actions()
-    loop each ToolCall
-      Run->>Registry: for_call(call)
-      Registry-->>Run: ToolBehavior
-      Run->>Tool: execute(call)
-      Tool->>HAApi: service/state API
-      HAApi-->>Tool: response
-      Tool-->>Run: ToolResult
-      Run->>Behavior: verify(call, result)
-    end
-    Run-->>API: execution
-  end
-
-  API-->>Auto: JSON response
-  Auto->>Assist: set_conversation_response()
-  Assist-->>User: spoken reply
-```
-
-### MQTT Entry Flow Diagram
-
-```mermaid
-sequenceDiagram
-  participant Door as Door sensor
-  participant Presence as mmWave sensor
-  participant Broker as MQTT broker
-  participant Listener as Z2MMqttListener
-  participant DB as SQLite
-  participant App as AgentAppState callback
-  participant Orch as Orchestrator
-  participant Factory as ActionFactory
-  participant Run as Runner
-  participant Registry as ToolBehaviorRegistry
-  participant Tool as HA tool client
-  participant HA as Home Assistant API
-
-  Door->>Broker: contact=false
-  Broker->>Listener: door topic payload
-  Listener->>DB: set belief.door_open=true
-  Listener->>DB: set belief.last_door_open_ts
-  Listener->>DB: append door_update
-
-  Presence->>Broker: presence=true
-  Broker->>Listener: presence topic payload
-  Listener->>DB: set belief.presence=true
-  Listener->>DB: append presence_update
-
-  alt within ENTRY_WINDOW_S and not on cooldown
-    Listener->>DB: append enter_detected
-    Listener->>App: on_enter callback
-    App->>Orch: handle_request(enter_room)
-    Orch->>Factory: build LightAction
-    Factory-->>Orch: typed action
-    Orch-->>App: light-on ToolCall plan
-    App->>Run: execute_actions(plan)
-    Run->>Registry: for_call(light.set)
-    Registry-->>Run: LightSetBehavior
-    Run->>Tool: execute(light.set)
-    Tool->>HA: turn on light
-  else presence becomes false
-    Listener->>DB: start vacancy timer
-    Note over Listener: after VACANCY_OFF_DELAY_S
-    Listener->>DB: append vacancy_detected
-    Listener->>App: on_vacant callback
-    App->>Run: execute_actions([light.set off])
-    Run->>Registry: for_call(light.set)
-    Registry-->>Run: LightSetBehavior
-    Run->>Tool: execute(light.set)
-    Tool->>HA: turn off light
-    Listener->>DB: append vacancy_off_executed
-  end
-```
-
-Mermaid source files also live in `docs/`:
-
-- `docs/architecture.mmd`
-- `docs/agent_runtime_class.mmd`
-- `docs/container_services.mmd`
-- `docs/physical_integration.mmd`
-- `docs/voice_chat_flow.mmd`
-- `docs/mqtt_entry_flow.mmd`
-- `docs/data_architecture.mmd`
-- `docs/analyze_bedroom.mmd`
-- `docs/diagrams.md`
-
-## Setup and Run
-
-### 1. Prerequisites
-
-- Python 3.10+
-- Docker and Docker Compose
-- An OpenAI-compatible model endpoint reachable at `LLM_BASE_URL`
-- For the full room automation stack: Home Assistant, MQTT, Zigbee2MQTT, and optionally a camera plus Wyoming STT/TTS
-
-### 2. Configure the agent
-
-```bash
-cp apps/bedroom-agent/.env.example apps/bedroom-agent/.env
-```
-
-Edit `apps/bedroom-agent/.env` and verify at least:
-
-- `AGENT_MODE=active` for real control, or `shadow` to dry-run without side effects
-- `TOOL_BACKEND=ha` for real Home Assistant, `local` for a standalone smoke test, and `http` only if you are running the mock service in `mock_ha/`
-- `HA_BASE_URL` and `HA_TOKEN`
-- `LLM_BASE_URL` and `LLM_MODEL`
-- `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, and `Z2M_PRESENCE_TOPIC`
-- `ENTRY_LIGHT_ENTITY_ID`, `BEDROOM_FAN_ENTITY_ID`, `BEDROOM_AC_ENTITY_ID`, and the other entity IDs so they match your Home Assistant names
-- `CAMERA_MODE`; if you are not using a live camera, set `CAMERA_MODE=file` and point `VISION_FALLBACK_IMAGE_PATH` to an existing image such as `./data/bedroom-latest.jpg`
-
-### 3. Start supporting services
-
-For the full stack from the repo root:
-
-```bash
-docker compose -f infra/home-automation/docker-compose.yaml up -d
-```
-
-Optional voice services:
-
-```bash
-docker compose -f wyoming/docker-compose.yaml up -d
-```
-
-Notes:
-
-- If you are only doing a standalone smoke test with `TOOL_BACKEND=local`, you can skip this step.
-- `infra/home-automation/docker-compose.yaml` uses `network_mode: host` and a hardcoded Zigbee serial device path. Update the `devices:` entry before starting Zigbee2MQTT on a new machine.
-- The LLM backend is not included in this repo. Start it separately and make sure `LLM_BASE_URL` is reachable from the agent.
-- Home Assistant rest commands in `infra/home-automation/ha_config/configuration.yaml` are currently pointed at `http://10.0.0.179:9000`. Change that to the actual host or IP running the agent before using voice control.
-
-### 4. Run the agent
-
-Local Python:
+Install the service:
 
 ```bash
 cd apps/bedroom-agent
@@ -636,97 +31,95 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e ".[dev]"
+```
+
+Run the agent in fully local mode:
+
+```bash
+TOOL_BACKEND=local \
+VISION_ANALYSIS_ENABLED=false \
 uvicorn src.app:app --host 0.0.0.0 --port 9000 --reload
 ```
 
-Docker:
+Optional: run the mock Home Assistant service from the repo root:
 
 ```bash
-docker compose -f apps/bedroom-agent/docker-compose.yml up --build -d
+python -m uvicorn mock_ha.app:app --host 0.0.0.0 --port 8124 --reload
 ```
 
-The agent listens on `http://localhost:9000`.
-
-### 5. Smoke test
+Then point the agent at it:
 
 ```bash
-curl http://localhost:9000/health
-curl http://localhost:9000/readyz
+cd apps/bedroom-agent
+TOOL_BACKEND=http \
+HA_BASE_URL=http://127.0.0.1:8124 \
+VISION_ANALYSIS_ENABLED=false \
+uvicorn src.app:app --host 0.0.0.0 --port 9000 --reload
 ```
 
-`/health` should return `ok: true`. `/readyz` returns `503` until the configured HA, MQTT, LLM, and vision dependencies are reachable.
+## API At A Glance
+
+Health check:
+
+```bash
+curl http://127.0.0.1:9000/health
+curl http://127.0.0.1:9000/readyz
+```
 
 Direct intent:
 
 ```bash
-curl -X POST http://localhost:9000/agent/run \
+curl -X POST http://127.0.0.1:9000/agent/run \
   -H 'Content-Type: application/json' \
-  -d '{"intent":"fan_on","args":{},"state":{"guest_mode":false}}'
+  -d '{
+    "intent": "sleep_mode",
+    "args": {},
+    "state": {"guest_mode": false}
+  }'
 ```
 
 Natural-language request:
 
 ```bash
-curl -X POST http://localhost:9000/agent/chat \
+curl -X POST http://127.0.0.1:9000/agent/chat \
   -H 'Content-Type: application/json' \
-  -d '{"text":"start focus mode","state":{"guest_mode":false}}'
+  -d '{
+    "text": "What should happen now?",
+    "state": {"guest_mode": false}
+  }'
 ```
 
-## Core Configuration
+`/agent/chat` can return:
 
-The agent reads settings from `apps/bedroom-agent/.env`.
+- `mode="action"` for routed or decision-driven actions
+- `mode="info"` for status or bedroom analysis queries
+- `mode="memory_update"` when follow-up feedback updates stored preferences
 
-Most important variables:
+## Configuration
 
-- `AGENT_MODE`: `shadow` or `active`
-- `TOOL_BACKEND`: `local`, `http`, or `ha`
-- `HA_BASE_URL` and `HA_TOKEN`: Home Assistant API access
-- `LLM_BASE_URL` and `LLM_MODEL`: OpenAI-compatible model backend settings
-- `OPENAI_API_KEY`: optional for hosted or local compatible servers that require auth
-- `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, `Z2M_PRESENCE_TOPIC`: Zigbee2MQTT integration
-- `CAMERA_MODE`, `CAMERA_DEVICE`, `VISION_FALLBACK_IMAGE_PATH`: image capture configuration
+The authoritative settings live in [apps/bedroom-agent/src/core/config.py](/home/rosurya/bedroom-agent/apps/bedroom-agent/src/core/config.py).
 
-For the full settings list, see `apps/bedroom-agent/src/core/config.py`.
+Common variables:
 
-## Home Assistant Integration
+- `AGENT_MODE=shadow|active`
+- `TOOL_BACKEND=local|http|ha`
+- `HA_BASE_URL`, `HA_TOKEN`
+- `LLM_BASE_URL`, `LLM_MODEL`, `OPENAI_API_KEY`
+- `LLM_DECISION_ENABLED`, `LLM_DECISION_TIMEOUT_S`, `LLM_DECISION_MIN_CONFIDENCE`
+- `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, `Z2M_PRESENCE_TOPIC`
+- `SQLITE_PATH`
+- `CAMERA_MODE=device|ha_snapshot|file`
+- `VISION_ANALYSIS_ENABLED`, `VISION_FALLBACK_IMAGE_PATH`
 
-Home Assistant configuration lives under `infra/home-automation/ha_config`.
+## Verification
 
-- `configuration.yaml` defines `rest_command` calls into the agent
-- `automations.yaml` routes every Assist utterance to `/agent/chat`
-- `scripts.yaml` exposes helper scripts such as `agent_chat_request` and `bedroom_agent_speak`
+From `apps/bedroom-agent`:
 
-The current voice entrypoint is a catch-all Assist trigger, so prompts like these all go through the agent LLM:
-
-- `start focus mode`
-- `cool the room`
-- `analyze bedroom`
-- `check my bedroom`
-
-This will also shadow normal built-in Assist intent handling unless you narrow the trigger again.
-
-If you change `configuration.yaml`, restart Home Assistant. If you only change automations or scripts, a reload is usually enough.
-
-## Repository Layout
-
-```text
-apps/bedroom-agent/             FastAPI agent service, Dockerfile, tests
-infra/home-automation/ha_config Home Assistant YAML config
-wyoming/                        Wyoming speech service compose file
-docs/                           diagrams, contracts, runbook
+```bash
+./.venv/bin/ruff check src tests
+./.venv/bin/pytest tests -q
 ```
 
-## Documentation
+## More Detail
 
-- `apps/bedroom-agent/README.md`: app-specific setup and API usage
-- `docs/contracts.md`: request/response, tool, state, and event contracts
-- `docs/runbook.md`: deployment, operations, and troubleshooting
-
-## Current Scope
-
-This repo is still a pragmatic v0:
-
-- orchestration is deterministic even when routing uses an LLM
-- safety checks are local and explicit
-- voice support is implemented through Home Assistant conversation automations
-- room analysis is useful, but depends heavily on the configured model actually supporting image inputs well
+Service-specific docs are in [apps/bedroom-agent/README.md](/home/rosurya/bedroom-agent/apps/bedroom-agent/README.md).

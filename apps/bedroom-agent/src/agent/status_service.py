@@ -4,7 +4,6 @@ import json
 from dataclasses import dataclass
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
-import time
 from datetime import datetime
 from llm.base import LLMClient
 from memory.sqlite_kv import SqliteKV
@@ -25,6 +24,7 @@ QUERY_WHY_LIGHT_ON = "why_light_on"
 QUERY_WHY_LIGHT_OFF = "why_light_off"
 QUERY_RECENT_EVENTS = "recent_events"
 QUERY_ROOM_STATUS = "room_status"
+QUERY_WHY_LAST_ACTION = "why_last_action"
 
 QUERY_EVENT_PRIORITIES: dict[str, list[str]] = {
     QUERY_WHY_LIGHT_ON: [
@@ -47,6 +47,11 @@ QUERY_EVENT_PRIORITIES: dict[str, list[str]] = {
         "door_update",
         "presence_update",
         "bedroom_analysis_completed",
+    ],
+    QUERY_WHY_LAST_ACTION: [
+        "llm_decision_returned",
+        "llm_intent_executed",
+        "preference_feedback_applied",
     ],
 }
 
@@ -93,7 +98,9 @@ class StatusService:
     llm: Optional[LLMClient]
     tz_name: str
 
-    def handle_query(self, query: str, runtime_state: dict[str, Any] | None = None) -> dict[str, Any]:
+    def handle_query(
+        self, query: str, runtime_state: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         query = (query or "What is the room status?").strip()
         query_type = self._classify(query)
         beliefs = self.kv.get_namespace("belief")
@@ -101,33 +108,100 @@ class StatusService:
         recent_events = self.kv.recent_events(limit=40)
         relevant_events = self._select_events_for_query(query_type, recent_events)
         live_status = self._live_status_context(runtime_state)
+        last_choice = self.kv.get("decision", "last_choice", None)
+        last_trace = self.kv.get("decision", "last_trace", None)
+        last_episode = self.kv.get("episodes", "last", None)
         context = {
             "query_type": query_type,
             "beliefs": beliefs,
             "prefs": prefs,
             "live_status": live_status,
+            "last_choice": last_choice,
+            "last_trace": last_trace,
+            "last_episode": last_episode,
             "recent_events": [self._serialize_event(evt) for evt in relevant_events],
         }
 
-        fallback = self._fallback_answer(query_type, beliefs, prefs, relevant_events, live_status)
+        fallback = self._fallback_answer(
+            query_type,
+            beliefs,
+            prefs,
+            relevant_events,
+            live_status,
+            last_choice=last_choice,
+            last_trace=last_trace,
+            last_episode=last_episode,
+        )
         structured = fallback
-        if query_type not in {QUERY_WHY_LIGHT_ON, QUERY_WHY_LIGHT_OFF}:
+        if query_type == QUERY_WHY_LAST_ACTION and (
+            (isinstance(last_trace, dict) and last_trace)
+            or (isinstance(last_choice, dict) and last_choice)
+            or (isinstance(last_episode, dict) and last_episode)
+        ):
+            result = self._build_result(
+                query_type=query_type,
+                beliefs=beliefs,
+                live_status=live_status,
+                recent_events=context["recent_events"],
+                structured=structured,
+                extra_structured={
+                    "last_choice": last_choice,
+                    "last_trace": last_trace,
+                    "last_episode": last_episode,
+                },
+            )
+            self._record_query_result(query=query, query_type=query_type, result=result)
+            return result
+        if query_type not in {QUERY_WHY_LIGHT_ON, QUERY_WHY_LIGHT_OFF, QUERY_WHY_LAST_ACTION}:
             structured = self._llm_answer(query=query, context=context, fallback=fallback)
-        print(f"Structured LLM answer: {structured}")
-        result = {
-            "summary": structured["answer"],
-            "structured": {
-                "query_type": query_type,
-                "beliefs": beliefs,
-                "live_status": live_status,
-                "recent_events": context["recent_events"],
-                "reasoning_tags": structured["reasoning_tags"],
-                "confidence": structured["confidence"],
-            },
+        extra_structured: dict[str, Any] | None = None
+        if query_type == QUERY_WHY_LAST_ACTION:
+            extra_structured = {
+                "last_choice": last_choice,
+                "last_trace": last_trace,
+                "last_episode": last_episode,
+            }
+        result = self._build_result(
+            query_type=query_type,
+            beliefs=beliefs,
+            live_status=live_status,
+            recent_events=context["recent_events"],
+            structured=structured,
+            extra_structured=extra_structured,
+        )
+        self._record_query_result(query=query, query_type=query_type, result=result)
+        return result
+
+    def _build_result(
+        self,
+        *,
+        query_type: str,
+        beliefs: dict[str, Any],
+        live_status: dict[str, Any],
+        recent_events: list[dict[str, Any]],
+        structured: dict[str, Any],
+        extra_structured: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "query_type": query_type,
+            "beliefs": beliefs,
+            "live_status": live_status,
+            "recent_events": recent_events,
+            "reasoning_tags": structured["reasoning_tags"],
+            "confidence": structured["confidence"],
         }
+        if isinstance(extra_structured, dict):
+            payload.update(extra_structured)
+        return {
+            "summary": structured["answer"],
+            "structured": payload,
+        }
+
+    def _record_query_result(
+        self, *, query: str, query_type: str, result: dict[str, Any]
+    ) -> None:
         self.kv.set("status", "last_summary", result)
         self.kv.append_event("status_query_answered", {"query": query, "query_type": query_type})
-        return result
 
     def _llm_answer(
         self, *, query: str, context: dict[str, Any], fallback: dict[str, Any]
@@ -145,11 +219,7 @@ class StatusService:
             "Return JSON with answer, reasoning_tags, confidence."
         )
         try:
-            print(f"LLM prompt: {prompt}")
-            t_0 = time.perf_counter()
             out = self.llm.generate_json(prompt=prompt, schema=STATUS_SCHEMA, temperature=0.1)
-            t_json = time.perf_counter()
-            print(f"LLM raw output: {out} (prompt took {t_json - t_0:.2f}s)")
         except Exception:
             return fallback
 
@@ -169,13 +239,34 @@ class StatusService:
         }
 
     def _classify(self, query: str) -> str:
-        q = query.lower()
+        q = (query or "").strip().lower()
+
+        if (
+            any(
+                phrase in q
+                for phrase in (
+                    "why did you do that",
+                    "why did you choose that",
+                    "why that action",
+                    "why that choice",
+                    "why did you pick that",
+                    "why last action",
+                    "why the last action",
+                    "why previous action",
+                )
+            )
+            or ("why" in q and "last" in q and "action" in q)
+            or ("what" in q and "last" in q and "action" in q)
+        ):
+            return QUERY_WHY_LAST_ACTION
+
         if "why" in q and ("turn on" in q or "turned on" in q or "light on" in q):
             return QUERY_WHY_LIGHT_ON
         if "why" in q and ("turn off" in q or "turned off" in q or "light off" in q):
             return QUERY_WHY_LIGHT_OFF
         if any(term in q for term in ("recent", "happened", "summary", "what happened")):
             return QUERY_RECENT_EVENTS
+
         return QUERY_ROOM_STATUS
 
     def _fallback_answer(
@@ -185,7 +276,17 @@ class StatusService:
         prefs: dict[str, Any],
         recent_events: list[dict[str, Any]],
         live_status: dict[str, Any],
+        *,
+        last_choice: dict[str, Any] | None = None,
+        last_trace: dict[str, Any] | None = None,
+        last_episode: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if query_type == QUERY_WHY_LAST_ACTION:
+            return self._fallback_why_last_action(
+                last_choice=last_choice,
+                last_trace=last_trace,
+                last_episode=last_episode,
+            )
         if query_type == QUERY_WHY_LIGHT_ON:
             return self._fallback_why_on(recent_events)
         if query_type == QUERY_WHY_LIGHT_OFF:
@@ -273,7 +374,13 @@ class StatusService:
                 f"Current bedroom status: presence is {presence}, the door belief is {door}, "
                 f"and guest mode is {guest_mode}.{device_part}{recent_part}{analysis_part}"
             ).strip(),
-            "reasoning_tags": ["presence", "door_open", "guest_mode", "live_status", "recent_events"],
+            "reasoning_tags": [
+                "presence",
+                "door_open",
+                "guest_mode",
+                "live_status",
+                "recent_events",
+            ],
             "confidence": 0.9,
         }
 
@@ -418,3 +525,62 @@ class StatusService:
         return datetime.fromtimestamp(float(ts), ZoneInfo(self.tz_name)).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
+
+    def _fallback_why_last_action(
+        self,
+        *,
+        last_choice: dict[str, Any] | None,
+        last_trace: dict[str, Any] | None,
+        last_episode: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if isinstance(last_trace, dict) and last_trace:
+            selected_intent = str(last_trace.get("selected_intent", "unknown") or "unknown")
+            selected_because = str(last_trace.get("selected_because", "") or "").strip()
+            memory_hits = last_trace.get("memory_hits", [])
+            signals = last_trace.get("signals", [])
+            guardrails = last_trace.get("guardrails", [])
+
+            parts: list[str] = [f"I chose {selected_intent}"]
+            if selected_because:
+                parts.append(f"because {selected_because}")
+            if signals:
+                parts.append(f"using signals {', '.join(str(x) for x in signals[:3])}")
+            if memory_hits:
+                parts.append(f"with memory {', '.join(str(x) for x in memory_hits[:3])}")
+            if guardrails:
+                parts.append(f"after checking {', '.join(str(x) for x in guardrails[:3])}")
+
+            return {
+                "answer": " ".join(parts) + ".",
+                "reasoning_tags": ["last_trace", selected_intent],
+                "confidence": 0.97,
+            }
+
+        if isinstance(last_choice, dict) and last_choice:
+            selected_intent = str(last_choice.get("intent", "unknown") or "unknown")
+            rationale = str(last_choice.get("rationale", "") or "").strip()
+            if rationale:
+                return {
+                    "answer": f"I most recently chose {selected_intent} because {rationale}.",
+                    "reasoning_tags": ["last_choice", selected_intent],
+                    "confidence": 0.86,
+                }
+
+        if isinstance(last_episode, dict) and last_episode:
+            selected_intent = str(last_episode.get("intent", "unknown") or "unknown")
+            plan_summary = last_episode.get("plan_summary", [])
+            if isinstance(plan_summary, list) and plan_summary:
+                return {
+                    "answer": (
+                        f"My most recent action was {selected_intent}, and the plan used "
+                        f"{', '.join(str(x) for x in plan_summary[:4])}."
+                    ),
+                    "reasoning_tags": ["last_episode", selected_intent],
+                    "confidence": 0.78,
+                }
+
+        return {
+            "answer": "I do not have a recent saved decision trace yet, so I cannot explain the last action reliably.",
+            "reasoning_tags": ["no_last_trace"],
+            "confidence": 0.62,
+        }

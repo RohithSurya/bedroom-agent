@@ -83,3 +83,23 @@ def test_breaker_recovers_after_timeout(tmp_path):
 
     r3 = runner._execute_with_transient_retries(c3)
     assert r3.ok is True
+
+
+class _CountingExecutor:
+    mode = "active"
+
+    def __init__(self) -> None:
+        self.read_calls = 0
+
+    def read_entity_state(self, entity_id: str) -> dict[str, str]:
+        self.read_calls += 1
+        return {"entity_id": entity_id, "state": "on", "attributes": {}}
+
+
+def test_runner_read_entity_state_calls_backend_once():
+    runner = Runner(executor=_CountingExecutor())  # type: ignore[arg-type]
+
+    state = runner.read_entity_state("light.bedroom_light")
+
+    assert state["state"] == "on"
+    assert runner.executor.read_calls == 1

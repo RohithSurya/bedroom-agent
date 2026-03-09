@@ -157,3 +157,22 @@ def test_fan_on_cooldown_adds_cooldown_safety_check():
     assert out["decision"].decision == "deny"
     assert out["decision"].reason.startswith("cooldown_active:")
     assert "cooldown" in out["decision"].safety_checks
+
+
+def test_sleep_mode_uses_memory_backed_preferred_temp():
+    orch = Orchestrator()
+    state = _base_state()
+    state["light_state"] = "on"
+    state["temperature_c"] = 27.0
+    state["sleep_target_temp_c"] = 24
+    state["sleep_preferred_temp_c"] = 26
+
+    out = orch.handle_request(intent="sleep_mode", args={}, state=state)
+
+    assert out["decision"].decision == "allow"
+    tools = [call.tool for call in out["actions"]]
+    assert tools[0] == "light.set"
+    assert "climate.set_temperature" in tools
+
+    temp_call = next(call for call in out["actions"] if call.tool == "climate.set_temperature")
+    assert temp_call.args["temperature"] == 26

@@ -28,6 +28,8 @@ from tools.ha_real_client import HAToolClientReal
 from vision.image_source import BedroomImageSource
 from vision.room_analyzer import BedroomRoomAnalyzer
 from reliability.deadline import Deadline
+from memory.tiered_memory import TieredMemory
+from memory.preference_feedback import PreferenceFeedback
 
 
 class AgentRunRequest(BaseModel):
@@ -83,6 +85,8 @@ class AgentAppState:
         )
         self.router = NLRouter(llm=self.llm)
         self.kv = SqliteKV(settings.SQLITE_PATH)
+        self.memory = TieredMemory(kv=self.kv)
+        self.preference_feedback = PreferenceFeedback(kv=self.kv)
         self.status_service = StatusService(kv=self.kv, llm=self.llm, tz_name=settings.TIMEZONE)
         self.room_analyzer = BedroomRoomAnalyzer(
             kv=self.kv,
@@ -138,7 +142,7 @@ class AgentAppState:
 
     def _required_entity_ids_for_intent(self, intent: str | None) -> set[str]:
         # If intent is None, default to “full” state (keeps old behavior for any callers)
-        if not intent:
+        if not intent or intent.strip().lower() == "status":
             return {
                 self.settings.ENTRY_LIGHT_ENTITY_ID,
                 self.settings.BEDROOM_LAMP_ENTITY_ID,
@@ -207,9 +211,25 @@ class AgentAppState:
         extra_state: dict[str, Any] | None = None,
         *,
         intent: str | None = None,
+        user_text: str | None = None,
     ) -> dict[str, Any]:
         beliefs = self.kv.get_namespace("belief")
         prefs = self.kv.get_namespace("prefs")
+
+        relevant_prefs = self.memory.get_relevant_preferences(
+            intent=intent,
+            user_text=user_text,
+            defaults={
+                "sleep.preferred_temp_c": int(self.settings.SLEEP_TARGET_TEMP_C),
+                "focus.prefer_fan": bool(self.settings.FOCUS_MODE_ENABLE_FAN),
+                "focus.prefer_climate": bool(self.settings.FOCUS_MODE_ENABLE_CLIMATE),
+                "comfort.preferred_temp_c": int(self.settings.COMFORT_TARGET_TEMP_C),
+                "comfort.prefer_fan": bool(self.settings.COMFORT_USE_FAN_FALLBACK),
+                "comfort.prefer_climate": True,
+            },
+        )
+        recent_episodes = self.memory.get_recent_episodes()
+        episode_summary = self.memory.get_rolling_summary()
 
         light_entity_id = self.settings.ENTRY_LIGHT_ENTITY_ID
         bedroom_lamp_entity_id = self.settings.BEDROOM_LAMP_ENTITY_ID
@@ -268,6 +288,42 @@ class AgentAppState:
             "focus_mode_enable_climate": bool(self.settings.FOCUS_MODE_ENABLE_CLIMATE),
             "sleep_mode_enable_climate": bool(self.settings.SLEEP_MODE_ENABLE_CLIMATE),
             "comfort_use_fan_fallback": bool(self.settings.COMFORT_USE_FAN_FALLBACK),
+            # Memory-backed preference context
+            "relevant_prefs": relevant_prefs,
+            "recent_episodes": recent_episodes,
+            "episode_summary": episode_summary,
+            "sleep_preferred_temp_c": relevant_prefs.get(
+                "sleep.preferred_temp_c",
+                int(self.settings.SLEEP_TARGET_TEMP_C),
+            ),
+            "sleep_prefer_lights_off": bool(relevant_prefs.get("sleep.prefer_lights_off", True)),
+            "focus_prefer_fan": bool(
+                relevant_prefs.get(
+                    "focus.prefer_fan",
+                    bool(self.settings.FOCUS_MODE_ENABLE_FAN),
+                )
+            ),
+            "focus_prefer_climate": bool(
+                relevant_prefs.get(
+                    "focus.prefer_climate",
+                    bool(self.settings.FOCUS_MODE_ENABLE_CLIMATE),
+                )
+            ),
+            "focus_preferred_temp_c": relevant_prefs.get(
+                "focus.preferred_temp_c",
+                int(self.settings.COMFORT_TARGET_TEMP_C),
+            ),
+            "comfort_preferred_temp_c": relevant_prefs.get(
+                "comfort.preferred_temp_c",
+                int(self.settings.COMFORT_TARGET_TEMP_C),
+            ),
+            "comfort_prefer_fan": bool(
+                relevant_prefs.get(
+                    "comfort.prefer_fan",
+                    bool(self.settings.COMFORT_USE_FAN_FALLBACK),
+                )
+            ),
+            "comfort_prefer_climate": bool(relevant_prefs.get("comfort.prefer_climate", True)),
             "vision": self._build_vision_state(),
         }
         state["room_uncomfortable"] = bool(
@@ -281,17 +337,47 @@ class AgentAppState:
             )
         )
 
-        # print("Built runtime state:", state)
-
         for key, value in (extra_state or {}).items():
             state.setdefault(key, value)
 
         state["_metrics"] = {"ha_reads": ha_reads, "required_ids": sorted(required_ids)}
         return state
 
+    def record_episode(
+        self,
+        *,
+        user_text: str,
+        intent: str,
+        state: dict[str, Any],
+        decision: dict[str, Any],
+        actions: list[dict[str, Any]],
+        execution: dict[str, Any],
+        memory_hits: list[str] | None = None,
+    ) -> dict[str, Any]:
+        episode = {
+            "ts": time.time(),
+            "user_text": user_text,
+            "intent": intent,
+            "memory_hits": memory_hits or [],
+            "state_snapshot": {
+                "presence": state.get("presence"),
+                "temperature_c": state.get("temperature_c"),
+                "humidity_pct": state.get("humidity_pct"),
+                "light_state": state.get("light_state"),
+                "fan_state": state.get("fan_state"),
+                "ac_state": state.get("ac_state"),
+                "ac_hvac_mode": state.get("ac_hvac_mode"),
+                "vision": state.get("vision"),
+            },
+            "plan_summary": [str(a.get("tool", "")) for a in actions],
+            "policy_decision": str(decision.get("decision", "") or ""),
+            "policy_reason": str(decision.get("reason", "") or ""),
+            "execution_success": bool(execution.get("success", False)),
+        }
+        return self.memory.record_episode(episode)
+
     def _on_enter_room(self, meta: dict[str, Any]) -> None:
         entity_id = self.settings.ENTRY_LIGHT_ENTITY_ID
-        quiet = bool(meta.get("quiet_hours", False))
 
         # Skip if already on
         already_on = False
@@ -637,6 +723,15 @@ def run_agent(req: AgentRunRequest) -> dict[str, Any]:
             deadline=deadline,
         )
         t_exec = time.perf_counter()
+        app.state.agent.record_episode(
+            user_text=f"/agent/run:{req.intent}",
+            intent=req.intent,
+            state=state,
+            decision=plan["decision"].model_dump(),
+            actions=[a.model_dump() for a in plan["actions"]],
+            execution=execution,
+            memory_hits=list(state.get("relevant_prefs", {}).keys()),
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -661,18 +756,27 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
     For hackathon scope:
     - route text -> intent
     - reuse existing policy+runner pipeline
-
-    Later you'll extend intents like analyze_bedroom/focus_start/etc.
-    """
+    - return info about routing + execution for better observability"""
     try:
         deadline = Deadline.from_now(app.state.agent.settings.REQUEST_BUDGET_S)
-        print(f"Received chat request with text: '{req.text}' and state: {req.state}")
         t0 = time.perf_counter()
         intent, args = app.state.agent.router.route(text=req.text, state={})
+        last_episode = app.state.agent.memory.get_last_episode()
+        feedback_result = app.state.agent.preference_feedback.apply(
+            user_text=req.text,
+            last_episode=last_episode,
+        )
+        if feedback_result is not None:
+            return {
+                "mode": "memory_update",
+                "message": feedback_result["message"],
+                "updates": feedback_result["updates"],
+                "last_intent": feedback_result["intent_scope"],
+            }
         t_nl_router = time.perf_counter()
 
         t_before_state = time.perf_counter()
-        state = app.state.agent.build_runtime_state(req.state)
+        state = app.state.agent.build_runtime_state(req.state, intent=intent, user_text=req.text)
         t_state = time.perf_counter()
 
         if intent == "status":
@@ -723,6 +827,14 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                 state=state,
             )
             t_decision = time.perf_counter()
+            decision_record = {
+                "intent": choice.intent,
+                "confidence": choice.confidence,
+                "rationale": choice.rationale,
+                "reasoning_tags": choice.reasoning_tags,
+                "fallback_used": choice.fallback_used,
+                "trace": choice.trace,
+            }
             agent.kv.append_event(
                 "llm_decision_returned",
                 {
@@ -737,7 +849,18 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                     "temperature_c": state.get("temperature_c"),
                     "humidity_pct": state.get("humidity_pct"),
                     "ac_available": state.get("ac_available"),
+                    "trace": choice.trace,
                 },
+            )
+            agent.kv.set(
+                "decision",
+                "last_trace",
+                choice.trace,
+            )
+            agent.kv.set(
+                "decision",
+                "last_choice",
+                decision_record,
             )
             if choice.fallback_used:
                 agent.kv.append_event(
@@ -750,6 +873,15 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                     "llm_intent_executed",
                     {"chosen_intent": choice.intent, "executed_tools": [], "success": True},
                 )
+                agent.record_episode(
+                    user_text=req.text,
+                    intent=choice.intent,
+                    state=state,
+                    decision={"decision": "allow", "reason": "no_action"},
+                    actions=[],
+                    execution={"success": True, "failures": [], "executed_tools": []},
+                    memory_hits=list(state.get("relevant_prefs", {}).keys()),
+                )
                 return {
                     "mode": "action",
                     "input": {"text": req.text, "intent": intent, "args": args},
@@ -759,6 +891,7 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                         "rationale": choice.rationale,
                         "reasoning_tags": choice.reasoning_tags,
                         "fallback_used": choice.fallback_used,
+                        "trace": choice.trace,
                     },
                     "policy": {"decision": "allow", "reason": "no_action"},
                     "actions": [],
@@ -766,14 +899,13 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                     "timings_ms": {
                         "nl_router": round((t_nl_router - t0) * 1000, 1),
                         "state": round((t_state - t_before_state) * 1000, 1),
-                        "t_decision": round((t_decision - t_state) * 1000, 1),
+                        "decision": round((t_decision - t_state) * 1000, 1),
                     },
                 }
 
             plan = agent.orchestrator.handle_request(
                 intent=choice.intent, args=choice.args, state=state
             )
-            print(f"Plan from orchestrator: {plan}")
             t_plan = time.perf_counter()
             policy = plan["decision"].model_dump()
             if plan["decision"].decision == "deny":
@@ -793,6 +925,15 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
                 cooldown_key=plan.get("cooldown_key"),
                 cooldown_seconds=int(plan.get("cooldown_seconds", 0)),
                 deadline=deadline,
+            )
+            agent.record_episode(
+                user_text=req.text,
+                intent=choice.intent,
+                state=state,
+                decision=policy,
+                actions=[a.model_dump() for a in plan["actions"]],
+                execution=execution,
+                memory_hits=list(state.get("relevant_prefs", {}).keys()),
             )
             t_exec = time.perf_counter()
             agent.kv.append_event(
@@ -828,7 +969,42 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
             }
 
         plan = app.state.agent.orchestrator.handle_request(intent=intent, args=args, state=state)
-        print(f"Plan from orchestrator: {plan}")
+        app.state.agent.kv.set(
+            "decision",
+            "last_choice",
+            {
+                "intent": intent,
+                "confidence": 1.0,
+                "rationale": f"Direct router matched the request to {intent}.",
+                "reasoning_tags": ["router_direct", intent],
+                "fallback_used": False,
+            },
+        )
+        app.state.agent.kv.set(
+            "decision",
+            "last_trace",
+            {
+                "goal": req.text,
+                "selected_intent": intent,
+                "selected_because": f"The request was directly matched to {intent}.",
+                "reasoning_tags": ["router_direct", intent],
+                "memory_hits": list(state.get("relevant_prefs", {}).keys())[:5],
+                "episode_summary": str(state.get("episode_summary", "") or ""),
+                "signals": [
+                    f"presence={bool(state.get('presence', False))}",
+                    f"temperature_c={state.get('temperature_c')}",
+                    f"humidity_pct={state.get('humidity_pct')}",
+                    f"ac_available={bool(state.get('ac_available', False))}",
+                ],
+                "guardrails": [
+                    "guest_mode_on" if bool(state.get("guest_mode", False)) else "guest_mode_off",
+                    "sleep_mode_enable_climate"
+                    if bool(state.get("sleep_mode_enable_climate", False))
+                    else "sleep_mode_climate_disabled",
+                ],
+                "fallback_used": False,
+            },
+        )
         t_plan = time.perf_counter()
         execution = app.state.agent.runner.execute_actions(
             correlation_id=plan["correlation_id"],
@@ -836,6 +1012,15 @@ def chat(req: AgentChatRequest) -> dict[str, Any]:
             cooldown_key=plan.get("cooldown_key"),
             cooldown_seconds=int(plan.get("cooldown_seconds", 0)),
             deadline=deadline,
+        )
+        app.state.agent.record_episode(
+            user_text=req.text,
+            intent=intent,
+            state=state,
+            decision=plan["decision"].model_dump(),
+            actions=[a.model_dump() for a in plan["actions"]],
+            execution=execution,
+            memory_hits=list(state.get("relevant_prefs", {}).keys()),
         )
         t_exec = time.perf_counter()
     except Exception as exc:

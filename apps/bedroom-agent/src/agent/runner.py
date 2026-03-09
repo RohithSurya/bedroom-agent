@@ -199,7 +199,11 @@ class Runner:
         behavior,
         deadline: Deadline | None = None,
     ) -> dict[str, Any]:
-        if verify.get("verified", False) or (not result.ok) or (not behavior.is_verification_critical(call)):
+        if (
+            verify.get("verified", False)
+            or (not result.ok)
+            or (not behavior.is_verification_critical(call))
+        ):
             return verify
 
         attempts = max(0, int(self.verification_settle_attempts))
@@ -245,7 +249,6 @@ class Runner:
                     continue
 
             # Execute + log
-            print(f"Executing tool: {call.tool} with args {call.args}")  # for visibility in logs
             result = self._execute_with_transient_retries(call, deadline)
             executed_tools.append(call.tool)
             self.logger.write(

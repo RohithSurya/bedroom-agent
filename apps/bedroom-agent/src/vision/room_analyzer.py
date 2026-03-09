@@ -513,7 +513,6 @@ class BedroomRoomAnalyzer:
         issue_text = " ".join(str(issue).strip().lower() for issue in (issues or []))
         query_text = str(query).strip().lower()
         evidence_text = f"{answer_text} {issue_text}".strip()
-        combined = f"{text} {evidence_text} {query_text}"
 
         neat_markers = (
             "neatly covered",

@@ -77,3 +77,24 @@ def test_status_service_filters_presence_spam_for_why_light_on(tmp_path):
     assert "do not see a recent successful entry trigger" in out["summary"].lower()
     assert len(out["structured"]["recent_events"]) == 1
     assert out["structured"]["recent_events"][0]["type"] == "presence_update"
+
+
+def test_status_service_persists_why_last_action_queries(tmp_path):
+    kv = SqliteKV(str(tmp_path / "memory.sqlite"))
+    kv.set(
+        "decision",
+        "last_trace",
+        {
+            "selected_intent": "sleep_mode",
+            "selected_because": "the user asked to wind down",
+            "signals": ["presence=True"],
+            "guardrails": ["guest_mode_off"],
+        },
+    )
+
+    service = StatusService(kv=kv, llm=None, tz_name="America/New_York")
+    out = service.handle_query("Why was that the last action?")
+
+    assert "sleep_mode" in out["summary"]
+    assert kv.get("status", "last_summary") == out
+    assert kv.recent_events(limit=1)[0]["type"] == "status_query_answered"

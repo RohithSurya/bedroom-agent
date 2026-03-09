@@ -1,23 +1,20 @@
 # bedroom-agent service
 
-FastAPI service for the bedroom automation agent.
-
-This package is the runtime core of the repo. It exposes HTTP endpoints for direct intents and natural-language requests, consumes Home Assistant and MQTT state, and executes deterministic tool calls after policy evaluation.
+FastAPI runtime for the bedroom automation agent. This service owns request routing, runtime-state assembly, deterministic orchestration, tool execution, background MQTT listeners, and local memory.
 
 ## Responsibilities
 
-- Serve `GET /health`, `POST /agent/run`, and `POST /agent/chat`
-- Build runtime context from Home Assistant entity state and local memory
-- Route natural language to high-level intents
-- Enforce policy gates and cooldowns
-- Execute Home Assistant tools and verify results
-- Listen for Zigbee2MQTT door and presence events
-- Persist beliefs, preferences, recent analysis, and event history
-- Optionally call an LLM for routing, status answers, decision support, and bedroom image analysis
+- Serve `GET /health` and `GET /readyz`
+- Accept `POST /agent/run` for direct intents
+- Accept `POST /agent/chat` for natural-language requests
+- Build runtime context from Home Assistant state, beliefs, preferences, recent episodes, and cached vision output
+- Enforce policy gates and cooldowns before tool execution
+- Persist beliefs, preferences, decision traces, recent episodes, status summaries, and vision analysis
+- Apply simple preference learning from follow-up feedback after sleep actions
 
 ## Supported Intents
 
-Direct execution intents accepted by `/agent/run`:
+Direct intents accepted by `/agent/run`:
 
 - `fan_on`
 - `fan_off`
@@ -28,13 +25,124 @@ Direct execution intents accepted by `/agent/run`:
 - `comfort_adjust`
 - `no_action`
 
-Natural-language routing through `/agent/chat` can additionally return:
+Additional natural-language intents routed by `/agent/chat`:
 
-- `analyze_bedroom`
 - `status`
+- `analyze_bedroom`
 - `decision_request`
 
-## Run Locally
+## Endpoint Behavior
+
+### `GET /health`
+
+Simple liveness probe. Returns the configured mode and tool backend.
+
+### `GET /readyz`
+
+Readiness probe that checks:
+
+- selected tool backend
+- MQTT listener connection state
+- LLM reachability when configured
+- vision fallback path when `CAMERA_MODE=file`
+
+The endpoint returns HTTP `503` when any required check fails.
+
+### `POST /agent/run`
+
+Executes a direct intent through:
+
+1. runtime state build
+2. deterministic orchestration
+3. policy evaluation and cooldown handling
+4. tool execution and verification
+5. episode recording
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:9000/agent/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "intent": "fan_on",
+    "args": {},
+    "state": {"guest_mode": false}
+  }'
+```
+
+### `POST /agent/chat`
+
+Routes natural language into one of three response modes:
+
+- `mode="action"`: routed intent or `decision_request` selected and executed
+- `mode="info"`: status explanation or bedroom analysis
+- `mode="memory_update"`: preference feedback updated from conversational follow-up
+
+Examples:
+
+```bash
+curl -X POST http://127.0.0.1:9000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "start focus mode"}'
+```
+
+```bash
+curl -X POST http://127.0.0.1:9000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "What should happen now?"}'
+```
+
+```bash
+curl -X POST http://127.0.0.1:9000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "That was too cold. Warmer next time."}'
+```
+
+## Memory Model
+
+SQLite namespaces currently used include:
+
+- `belief`: door and presence state
+- `prefs`: user preferences such as sleep temperature or light preference
+- `episodes`: last episode, recent episodes, rolling summary
+- `decision`: last chosen intent and trace for explainability
+- `status`: last status response
+- `vision`: latest bedroom analysis
+
+Key memory components:
+
+- `TieredMemory`: fetches relevant preferences, recent episodes, and rolling summaries
+- `PreferenceFeedback`: updates sleep preferences from short follow-up feedback
+- `StatusService`: explains recent behavior using beliefs, events, device state, and saved decision traces
+
+## Configuration
+
+Settings are loaded from `.env` with `pydantic-settings`. The source of truth is [src/core/config.py](/home/rosurya/bedroom-agent/apps/bedroom-agent/src/core/config.py).
+
+Important variables:
+
+- `AGENT_MODE=shadow|active`
+- `TOOL_BACKEND=local|http|ha`
+- `HA_BASE_URL`, `HA_TOKEN`
+- `LLM_BASE_URL`, `LLM_MODEL`, `OPENAI_API_KEY`
+- `LLM_TIMEOUT_S`
+- `LLM_DECISION_ENABLED`
+- `LLM_DECISION_TIMEOUT_S`
+- `LLM_DECISION_MIN_CONFIDENCE`
+- `LLM_DECISION_USE_VISION`
+- `LLM_DECISION_MAX_EVENTS`
+- `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`
+- `ENTRY_LIGHT_ENTITY_ID`, `BEDROOM_LAMP_ENTITY_ID`, `BEDROOM_FAN_ENTITY_ID`, `BEDROOM_AC_ENTITY_ID`
+- `TEMP_SENSOR_ENTITY_ID`, `HUMIDITY_SENSOR_ENTITY_ID`
+- `COMFORT_TRIGGER_TEMP_C`, `COMFORT_TRIGGER_HUMIDITY_PCT`
+- `COMFORT_TARGET_TEMP_C`, `SLEEP_TARGET_TEMP_C`
+- `CAMERA_MODE`, `CAMERA_ENTITY_ID`, `CAMERA_DEVICE`
+- `VISION_ANALYSIS_ENABLED`, `VISION_FALLBACK_IMAGE_PATH`, `VISION_DEBUG_SAVE_DIR`
+- `REQUEST_BUDGET_S`
+
+## Local Development
+
+Install and run:
 
 ```bash
 python -m venv .venv
@@ -44,82 +152,34 @@ pip install -e ".[dev]"
 uvicorn src.app:app --host 0.0.0.0 --port 9000 --reload
 ```
 
-Health check:
+Run the service against the mock HA backend:
 
 ```bash
-curl http://localhost:9000/health
-```
-
-Example direct intent:
-
-```bash
-curl -X POST http://localhost:9000/agent/run \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "intent": "fan_on",
-    "args": {},
-    "state": {"guest_mode": false}
-  }'
-```
-
-Example natural-language request:
-
-```bash
-curl -X POST http://localhost:9000/agent/chat \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "text": "start focus mode",
-    "state": {"guest_mode": false}
-  }'
+TOOL_BACKEND=http \
+HA_BASE_URL=http://127.0.0.1:8124 \
+VISION_ANALYSIS_ENABLED=false \
+uvicorn src.app:app --host 0.0.0.0 --port 9000 --reload
 ```
 
 ## Docker
+
+Use the included compose file:
 
 ```bash
 docker compose up --build
 ```
 
-The container publishes port `9000` and mounts `./data` to `/data` for SQLite state and fallback images.
+The container publishes port `9000`, stores SQLite state under `/data`, and uses `/readyz` as its healthcheck target.
 
-## Configuration
+## Persistence And Logs
 
-Settings are loaded from `.env` using `pydantic-settings`.
+- SQLite state defaults to `data/memory.sqlite`
+- JSONL event logs default to `logs/events.jsonl`
+- Vision debug captures are written to `data/debug` when enabled
 
-Important variables:
+## Verification
 
-- `AGENT_MODE=shadow|active`
-- `TOOL_BACKEND=local|http|ha`
-- `HA_BASE_URL`
-- `HA_TOKEN`
-- `LLM_BASE_URL`
-- `LLM_MODEL`
-- `OPENAI_API_KEY` (optional for local OpenAI-compatible servers)
-- `MQTT_HOST`
-- `MQTT_PORT`
-- `CAMERA_MODE=device|ha_snapshot|file`
-- `VISION_ANALYSIS_ENABLED=true|false`
-
-The authoritative settings list is in `src/core/config.py`.
-
-## Persistence and Logs
-
-- SQLite state: `data/memory.sqlite` by default
-- JSONL event log: `logs/events.jsonl` by default
-
-SQLite namespaces currently used include:
-
-- `belief`
-- `prefs`
-- `vision`
-- `status`
-
-## LLM Backend
-
-The code uses a single OpenAI-compatible backend (`/v1/chat/completions`), which matches `llama.cpp` server mode.
-
-## Notes on Safety
-
-- The LLM does not emit raw Home Assistant service calls.
-- Tool execution remains deterministic in `Orchestrator` and `Runner`.
-- Policy checks cover guest mode, presence, cooldowns, and comfort-related guardrails.
-- When the LLM is unavailable, the app falls back to deterministic behavior or concise failure summaries.
+```bash
+./.venv/bin/ruff check src tests
+./.venv/bin/pytest tests -q
+```

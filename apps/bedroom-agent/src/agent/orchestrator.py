@@ -142,7 +142,12 @@ class Orchestrator:
             sleep_mode_enable_climate = bool(state.get("sleep_mode_enable_climate"))
             comfort_use_fan_fallback = bool(state.get("comfort_use_fan_fallback"))
             temperature_c = state.get("temperature_c")
-            sleep_target_temp_c = int(state.get("sleep_target_temp_c", 24))
+            sleep_effective_temp_c = int(
+                state.get(
+                    "sleep_preferred_temp_c",
+                    state.get("sleep_target_temp_c", 24),
+                )
+            )
             ac_entity_id = str(state.get("ac_entity_id", "climate.bedroom_ac"))
             fan_entity_id = str(state.get("fan_entity_id", "fan.bedroom_fan"))
 
@@ -150,7 +155,7 @@ class Orchestrator:
                 ac_available
                 and sleep_mode_enable_climate
                 and isinstance(temperature_c, (int, float))
-                and float(temperature_c) > float(sleep_target_temp_c)
+                and float(temperature_c) > float(sleep_effective_temp_c)
             )
 
             if should_cool:
@@ -158,13 +163,13 @@ class Orchestrator:
                     self.action_factory.climate(
                         entity_id=ac_entity_id,
                         hvac_mode="cool",
-                        temperature=sleep_target_temp_c,
+                        temperature=sleep_effective_temp_c,
                         fan_mode="low",
                     )
                 )
                 actions.append(
                     self.action_factory.speech(
-                        message=f"Sleep mode on. Turning off the light and cooling to {sleep_target_temp_c}C."
+                        message=f"Sleep mode on. Turning off the light and cooling to {sleep_effective_temp_c}C."
                     )
                 )
             elif ac_available and sleep_mode_enable_climate:

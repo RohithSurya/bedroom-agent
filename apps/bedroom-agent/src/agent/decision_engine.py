@@ -30,6 +30,7 @@ class DecisionChoice:
     fallback_used: bool
     source: str
     trigger: str
+    trace: dict[str, Any]
 
     def model_dump(self) -> dict[str, Any]:
         return asdict(self)
@@ -53,7 +54,7 @@ class DecisionEngine:
     ) -> DecisionChoice:
         fast_path = self._fast_path_choice(source=source, trigger=trigger, user_text=user_text)
         if fast_path is not None:
-            return self._align_choice_with_state(fast_path, state=state, user_text=user_text)
+            return self._finalize_choice(fast_path, state=state, user_text=user_text)
 
         context = self._build_context(
             source=source,
@@ -68,7 +69,7 @@ class DecisionEngine:
         )
 
         if self.llm is None:
-            return fallback
+            return self._finalize_choice(fallback, state=state, user_text=user_text)
 
         prompt = (
             "You are the decision layer for a bedroom automation agent. "
@@ -82,7 +83,7 @@ class DecisionEngine:
         try:
             out = self.llm.generate_json(prompt=prompt, schema=DECISION_SCHEMA, temperature=0.0)
         except Exception:
-            return fallback
+            return self._finalize_choice(fallback, state=state, user_text=user_text)
 
         intent = str(out.get("intent", "")).strip()
         args = out.get("args") if isinstance(out.get("args"), dict) else {}
@@ -91,17 +92,17 @@ class DecisionEngine:
         confidence = out.get("confidence")
 
         if intent not in DECISION_INTENTS:
-            return fallback
+            return self._finalize_choice(fallback, state=state, user_text=user_text)
         if not rationale:
-            return fallback
+            return self._finalize_choice(fallback, state=state, user_text=user_text)
         if not isinstance(reasoning_tags, list) or not all(
             isinstance(tag, str) and tag.strip() for tag in reasoning_tags
         ):
-            return fallback
+            return self._finalize_choice(fallback, state=state, user_text=user_text)
         if not isinstance(confidence, (int, float)):
-            return fallback
+            return self._finalize_choice(fallback, state=state, user_text=user_text)
         if float(confidence) < self.min_confidence:
-            return fallback
+            return self._finalize_choice(fallback, state=state, user_text=user_text)
 
         choice = DecisionChoice(
             intent=intent,
@@ -112,8 +113,9 @@ class DecisionEngine:
             fallback_used=False,
             source=source,
             trigger=trigger,
+            trace={},
         )
-        return self._align_choice_with_state(choice, state=state, user_text=user_text)
+        return self._finalize_choice(choice, state=state, user_text=user_text)
 
     def _fast_path_choice(
         self,
@@ -128,7 +130,13 @@ class DecisionEngine:
 
         if any(
             phrase in text
-            for phrase in ("end focus mode", "stop focus mode", "turn off focus mode", "focus mode off", "stop deep work")
+            for phrase in (
+                "end focus mode",
+                "stop focus mode",
+                "turn off focus mode",
+                "focus mode off",
+                "stop deep work",
+            )
         ):
             return DecisionChoice(
                 intent="focus_end",
@@ -139,6 +147,7 @@ class DecisionEngine:
                 fallback_used=False,
                 source=source,
                 trigger=trigger,
+                trace={},
             )
 
         if any(
@@ -161,6 +170,7 @@ class DecisionEngine:
                 fallback_used=False,
                 source=source,
                 trigger=trigger,
+                trace={},
             )
 
         if any(
@@ -181,6 +191,7 @@ class DecisionEngine:
                 fallback_used=False,
                 source=source,
                 trigger=trigger,
+                trace={},
             )
 
         if self._is_comfort_request(user_text):
@@ -193,9 +204,34 @@ class DecisionEngine:
                 fallback_used=False,
                 source=source,
                 trigger=trigger,
+                trace={},
             )
 
         return None
+
+    def _episode_context(self, state: dict[str, Any]) -> dict[str, Any]:
+        recent = state.get("recent_episodes", [])
+        if not isinstance(recent, list):
+            recent = []
+
+        compact_recent: list[dict[str, Any]] = []
+        for ep in recent[:3]:
+            if not isinstance(ep, dict):
+                continue
+            compact_recent.append(
+                {
+                    "intent": ep.get("intent"),
+                    "policy_decision": ep.get("policy_decision"),
+                    "execution_success": ep.get("execution_success"),
+                    "memory_hits": ep.get("memory_hits", []),
+                    "plan_summary": ep.get("plan_summary", []),
+                }
+            )
+
+        return {
+            "summary": str(state.get("episode_summary", "") or ""),
+            "recent": compact_recent,
+        }
 
     def _build_context(
         self,
@@ -215,10 +251,18 @@ class DecisionEngine:
                 payload = event["payload"]
                 if "presence" in payload:
                     recent.append(
-                        {"type": event["type"], "ts": event["ts"], "payload": {"presence": payload["presence"]}}
+                        {
+                            "type": event["type"],
+                            "ts": event["ts"],
+                            "payload": {"presence": payload["presence"]},
+                        }
                     )
             if len(recent) >= self.max_events:
                 break
+
+        relevant_prefs = state.get("relevant_prefs", {})
+        if not isinstance(relevant_prefs, dict):
+            relevant_prefs = {}
 
         context = {
             "source": source,
@@ -249,11 +293,106 @@ class DecisionEngine:
                 "light_state": state.get("light_state"),
                 "fan_state": state.get("fan_state"),
             },
+            "memory": {
+                "relevant_preferences": relevant_prefs,
+                "episodes": self._episode_context(state),
+            },
             "allowed_intents": list(DECISION_INTENTS),
         }
         if self.use_vision and isinstance(state.get("vision"), dict):
             context["vision"] = state["vision"]
         return context
+
+    def _bounded_signals(self, state: dict[str, Any]) -> list[str]:
+        signals: list[str] = []
+
+        if "presence" in state:
+            signals.append(f"presence={bool(state.get('presence', False))}")
+        if "guest_mode" in state:
+            signals.append(f"guest_mode={bool(state.get('guest_mode', False))}")
+
+        temperature_c = state.get("temperature_c")
+        if isinstance(temperature_c, (int, float)):
+            signals.append(f"temperature_c={float(temperature_c):.1f}")
+
+        humidity_pct = state.get("humidity_pct")
+        if isinstance(humidity_pct, (int, float)):
+            signals.append(f"humidity_pct={float(humidity_pct):.1f}")
+
+        if "room_uncomfortable" in state:
+            signals.append(f"room_uncomfortable={bool(state.get('room_uncomfortable', False))}")
+
+        if "ac_available" in state:
+            signals.append(f"ac_available={bool(state.get('ac_available', False))}")
+
+        vision = state.get("vision")
+        if isinstance(vision, dict) and vision.get("available"):
+            if "sleep_readiness" in vision:
+                signals.append(f"vision.sleep_readiness={vision.get('sleep_readiness')}")
+            if "focus_readiness" in vision:
+                signals.append(f"vision.focus_readiness={vision.get('focus_readiness')}")
+            if "bed_state" in vision:
+                signals.append(f"vision.bed_state={vision.get('bed_state')}")
+            if "desk_state" in vision:
+                signals.append(f"vision.desk_state={vision.get('desk_state')}")
+
+        return signals[:8]
+
+    def _guardrails(self, state: dict[str, Any]) -> list[str]:
+        guards: list[str] = []
+
+        guards.append("guest_mode_on" if bool(state.get("guest_mode", False)) else "guest_mode_off")
+        guards.append("presence_true" if bool(state.get("presence", False)) else "presence_false")
+        guards.append(
+            "room_uncomfortable"
+            if bool(state.get("room_uncomfortable", False))
+            else "room_comfortable"
+        )
+        guards.append(
+            "ac_available" if bool(state.get("ac_available", False)) else "ac_unavailable"
+        )
+
+        vision = state.get("vision")
+        if isinstance(vision, dict):
+            guards.append(
+                "vision_available" if bool(vision.get("available")) else "vision_unavailable"
+            )
+
+        return guards
+
+    def _build_trace(
+        self,
+        *,
+        choice: DecisionChoice,
+        state: dict[str, Any],
+        user_text: str | None,
+    ) -> dict[str, Any]:
+        relevant_prefs = state.get("relevant_prefs", {})
+        if not isinstance(relevant_prefs, dict):
+            relevant_prefs = {}
+
+        return {
+            "goal": (user_text or "").strip()[:120] or choice.trigger,
+            "selected_intent": choice.intent,
+            "selected_because": choice.rationale,
+            "reasoning_tags": choice.reasoning_tags[:5],
+            "memory_hits": list(relevant_prefs.keys())[:5],
+            "episode_summary": str(state.get("episode_summary", "") or ""),
+            "signals": self._bounded_signals(state),
+            "guardrails": self._guardrails(state),
+            "fallback_used": bool(choice.fallback_used),
+        }
+
+    def _finalize_choice(
+        self,
+        choice: DecisionChoice,
+        *,
+        state: dict[str, Any],
+        user_text: str | None,
+    ) -> DecisionChoice:
+        aligned = self._align_choice_with_state(choice, state=state, user_text=user_text)
+        aligned.trace = self._build_trace(choice=aligned, state=state, user_text=user_text)
+        return aligned
 
     def _fallback_choice(
         self,
@@ -280,7 +419,10 @@ class DecisionEngine:
                 intent = "focus_start"
                 tags = ["fallback", "focus_request"]
                 rationale = "Fallback selected focus_start from the user request."
-        elif any(phrase in text for phrase in ("comfortable", "comfort", "cool the room", "cool room", "cool")):
+        elif any(
+            phrase in text
+            for phrase in ("comfortable", "comfort", "cool the room", "cool room", "cool")
+        ):
             intent = "comfort_adjust"
             tags = ["fallback", "comfort_request"]
             rationale = "Fallback selected comfort_adjust from the user request."
@@ -294,6 +436,7 @@ class DecisionEngine:
             fallback_used=True,
             source=source,
             trigger=trigger,
+            trace={},
         )
 
     def _align_choice_with_state(
@@ -309,6 +452,7 @@ class DecisionEngine:
                 fallback_used=False,
                 source=choice.source,
                 trigger=choice.trigger,
+                trace={},
             )
         if (
             choice.intent == "no_action"
@@ -324,6 +468,7 @@ class DecisionEngine:
                 fallback_used=choice.fallback_used,
                 source=choice.source,
                 trigger=choice.trigger,
+                trace={},
             )
         return choice
 

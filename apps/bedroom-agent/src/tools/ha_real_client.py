@@ -114,7 +114,7 @@ class HAToolClientReal:
                 },
                 timeout=(3.0, 30.0),
             )
-        except requests.RequestException as e:
+        except requests.RequestException:
             pass
 
     def execute(self, call: ToolCall) -> ToolResult:
