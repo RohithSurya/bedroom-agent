@@ -197,9 +197,7 @@ class StatusService:
             "structured": payload,
         }
 
-    def _record_query_result(
-        self, *, query: str, query_type: str, result: dict[str, Any]
-    ) -> None:
+    def _record_query_result(self, *, query: str, query_type: str, result: dict[str, Any]) -> None:
         self.kv.set("status", "last_summary", result)
         self.kv.append_event("status_query_answered", {"query": query, "query_type": query_type})
 
@@ -208,7 +206,6 @@ class StatusService:
     ) -> dict[str, Any]:
         if self.llm is None:
             return fallback
-
         context_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
         prompt = (
             "You explain a bedroom automation agent's behavior using only the supplied JSON context. "

@@ -68,8 +68,8 @@ def test_room_analyzer_uses_fallback_file_and_persists_analysis(tmp_path):
 
     assert "desk looks actively in use" in out["summary"].lower()
     assert "bed is partially covered" in out["summary"].lower()
-    assert out["structured"]["focus_readiness"] == 0.4
-    assert out["structured"]["sleep_readiness"] == 0.45
+    assert out["structured"]["focus_readiness"] == 0.58
+    assert out["structured"]["sleep_readiness"] == 0.31
     stored = kv.get("vision", "latest_bedroom_analysis")
     assert stored["source"] == "file"
     assert stored["desk_state"] == "active"

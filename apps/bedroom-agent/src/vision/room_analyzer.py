@@ -216,8 +216,6 @@ class BedroomRoomAnalyzer:
             "summary": str(out["summary"]).strip(),
         }
         if not self._is_specific_query(query):
-            normalized["focus_readiness"] = self._compute_focus_readiness(normalized)
-            normalized["sleep_readiness"] = self._compute_sleep_readiness(normalized)
             normalized["summary"] = self._build_generic_summary(normalized)
             normalized["query_answer"] = normalized["summary"]
         return normalized
@@ -245,6 +243,8 @@ class BedroomRoomAnalyzer:
             "Do not give a generic room summary in query_answer. "
             "If the answer is visible, say so directly. If it is not visible, say that clearly. "
             "If the image is too unclear, say that it is unclear from the visible image. "
+            "Duvet should be on the bed and folded at the pillow. In this case don't treat as bad"
+            "Consider only the bed when giving sleep_readiness score. Don't consider laundry basket or any other surroundings."
             "bed_state must be made, partial, or unmade. "
             "desk_state can be tidy, active, or cluttered. "
             "issues must be at most 3 short phrases. "
@@ -269,13 +269,16 @@ class BedroomRoomAnalyzer:
         prompt = (
             "Analyze one bedroom image and return grounded JSON only. "
             f"User query: {query}. "
-            "Use short labels only. "
-            "bed_state can be made, partial, or unmade. "
-            "Count a bed as made if a comforter or duvet neatly covers most of the mattress, even if pillows are simple or minimal. "
-            "Use partial only if bedding is folded back, bunched, or part of the mattress is clearly exposed. "
+            "Do not give a generic room summary in query_answer. "
+            "If the answer is visible, say so directly. If it is not visible, say that clearly. "
+            "If the image is too unclear, say that it is unclear from the visible image. "
+            "Duvet should be on the bed and folded at the pillow. In this case don't treat as bad"
+            "Consider only the bed when giving sleep_readiness score. Don't consider laundry basket or any other surroundings."
+            "bed_state must be made, partial, or unmade. "
             "desk_state can be tidy, active, or cluttered. "
             "issues must be at most 3 short phrases. "
-            "summary must be one short sentence about the visible room."
+            "query_answer must answer the exact question in one short sentence. "
+            "summary must be one short sentence describing the overall visible room state."
         )
         try:
             out = self.llm.generate_json(
@@ -290,13 +293,6 @@ class BedroomRoomAnalyzer:
         coerced = self._coerce_analysis(out, query=query)
         if not coerced.get("query_answer"):
             coerced["query_answer"] = coerced.get("summary", "")
-        if coerced.get("focus_readiness", 0.0) == 0.0 and coerced.get("desk_state") == "active":
-            coerced["focus_readiness"] = 0.6
-        if coerced.get("sleep_readiness", 0.0) == 0.0 and coerced.get("bed_state") in {
-            "made",
-            "partial",
-        }:
-            coerced["sleep_readiness"] = 0.4 if coerced["bed_state"] == "made" else 0.2
         return coerced
 
     def _valid_analysis(self, out: dict[str, Any]) -> bool:
@@ -331,6 +327,8 @@ class BedroomRoomAnalyzer:
             f"Prompt profile: {self.prompt_profile}. User query: {query}\n"
             "Rules: bed_state must be made, partial, or unmade. "
             "A bed with a comforter or duvet neatly covering most of the mattress counts as made, including hotel-style simple bedding. "
+            "Only check if pillows are at the right place and bed is not uneven for sleep_readiness score. If bed is made sleep_readiness is high"
+            "Laundry basket near bed is normal and don't consider it as dirty"
             "Use partial only when bedding is visibly folded back, bunched up, or part of the mattress is exposed. "
             "desk_state must be tidy, active, or cluttered. "
             "focus_readiness and sleep_readiness must be numbers from 0.0 to 1.0. "
@@ -409,7 +407,9 @@ class BedroomRoomAnalyzer:
         if not summary and not query_answer:
             return True
         if self._is_specific_query(query):
-            return (not query_answer) or (not self._query_answer_addresses_query(query, query_answer))
+            return (not query_answer) or (
+                not self._query_answer_addresses_query(query, query_answer)
+            )
         return not summary or (
             not issues
             and bed_state == "made"
@@ -452,7 +452,10 @@ class BedroomRoomAnalyzer:
         if normalized in GENERIC_ANALYSIS_MARKERS:
             return True
         for prefix in ("please ", "can you ", "could you ", "would you ", "tony "):
-            if normalized.startswith(prefix) and normalized[len(prefix) :] in GENERIC_ANALYSIS_MARKERS:
+            if (
+                normalized.startswith(prefix)
+                and normalized[len(prefix) :] in GENERIC_ANALYSIS_MARKERS
+            ):
                 return True
         return False
 
@@ -666,56 +669,3 @@ class BedroomRoomAnalyzer:
             parts.append(f"Visible issue: {str(issues[0]).strip()}.")
 
         return " ".join(parts)
-
-    def _compute_focus_readiness(self, out: dict[str, Any]) -> float:
-        desk_state = str(out.get("desk_state", "active")).strip().lower()
-        issues = [
-            str(issue).strip().lower() for issue in out.get("issues", []) if str(issue).strip()
-        ]
-
-        base = {
-            "tidy": 0.8,
-            "active": 0.6,
-            "cluttered": 0.35,
-        }.get(desk_state, 0.5)
-
-        focus_penalty_markers = (
-            "desk clutter",
-            "lack of organization",
-            "laundry",
-            "clutter",
-            "bright lighting",
-        )
-        penalties = sum(
-            0.1 for issue in issues if any(marker in issue for marker in focus_penalty_markers)
-        )
-        return max(0.0, min(1.0, round(base - penalties, 2)))
-
-    def _compute_sleep_readiness(self, out: dict[str, Any]) -> float:
-        bed_state = str(out.get("bed_state", "made")).strip().lower()
-        issues = [
-            str(issue).strip().lower() for issue in out.get("issues", []) if str(issue).strip()
-        ]
-        occupied = bool(out.get("occupied", False))
-
-        base = {
-            "made": 0.75,
-            "partial": 0.55,
-            "unmade": 0.25,
-        }.get(bed_state, 0.5)
-
-        sleep_penalty_markers = (
-            "bright lighting",
-            "laundry",
-            "clutter near bed",
-            "blanket on floor",
-            "bedding on floor",
-            "messy bed",
-            "unmade bed",
-        )
-        penalties = sum(
-            0.1 for issue in issues if any(marker in issue for marker in sleep_penalty_markers)
-        )
-        if occupied:
-            penalties += 0.05
-        return max(0.0, min(1.0, round(base - penalties, 2)))

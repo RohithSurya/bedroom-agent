@@ -317,25 +317,25 @@ class Runner:
                         }
                     )
 
-        # Graceful degradation: if lights failed, speak fallback message.
-        if not light_ok:
-            fallback = ToolCall(
-                tool="tts.say",
-                args={"message": "I couldn't change the lights right now."},
-                idempotency_key=new_idempotency_key(),
-                correlation_id=correlation_id,
-            )
-            fr = self.executor.execute(fallback)
-            self.logger.write(
-                correlation_id=correlation_id, event_type="tool_result", payload=fr.model_dump()
-            )
-            fv = self._verify(fallback, fr)
-            self.logger.write(
-                correlation_id=correlation_id,
-                event_type="verification",
-                payload={"tool": "tts.say", "verify": fv},
-            )
-            executed_tools.append("tts.say")
+        # # Graceful degradation: if lights failed, speak fallback message.
+        # if not light_ok:
+        #     fallback = ToolCall(
+        #         tool="tts.say",
+        #         args={"message": "I couldn't change the lights right now."},
+        #         idempotency_key=new_idempotency_key(),
+        #         correlation_id=correlation_id,
+        #     )
+        #     fr = self.executor.execute(fallback)
+        #     self.logger.write(
+        #         correlation_id=correlation_id, event_type="tool_result", payload=fr.model_dump()
+        #     )
+        #     fv = self._verify(fallback, fr)
+        #     self.logger.write(
+        #         correlation_id=correlation_id,
+        #         event_type="verification",
+        #         payload={"tool": "tts.say", "verify": fv},
+        #     )
+        #     executed_tools.append("tts.say")
 
         success = len(failures) == 0
 

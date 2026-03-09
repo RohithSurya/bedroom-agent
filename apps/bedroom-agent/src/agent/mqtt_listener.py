@@ -141,7 +141,6 @@ class Z2MMqttListener:
         self.kv.append_event("mqtt_disconnected", {"rc": rc})
 
     def _on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-        # print(f"MQTT message received on topic {msg.topic} with payload {msg.payload}")
         topic = msg.topic
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
