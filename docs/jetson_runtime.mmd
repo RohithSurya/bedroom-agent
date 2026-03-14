@@ -1,0 +1,33 @@
+flowchart LR
+  subgraph Jetson["Jetson Orin Nano Super"]
+    subgraph AgentStack["Docker: apps/bedroom-agent/docker-compose.yml"]
+      Agent["bedroom-agent\nFastAPI service\n:9000"]
+    end
+
+    subgraph HAStack["Docker: infra/home-automation/docker-compose.yaml"]
+      HA["homeassistant\n:8123"]
+      MQTT["mosquitto\n:1883"]
+      Z2M["zigbee2mqtt"]
+    end
+
+    subgraph VoiceStack["Docker: wyoming/docker-compose.yaml"]
+      Whisper["faster-whisper\nWyoming STT"]
+      Piper["wyoming-piper\nWyoming TTS"]
+    end
+
+    subgraph LLMStack["Host service: systemd"]
+      Llama["llama.cpp server\nMinistral 3B Instruct\n:8081"]
+    end
+  end
+
+  Z2M -->|publish device telemetry| MQTT
+  MQTT -->|entity updates| HA
+  MQTT -->|presence + door topics| Agent
+
+  HA -->|REST /agent/run /agent/chat| Agent
+  Agent -->|HA state + services| HA
+
+  HA -->|speech-to-text| Whisper
+  HA -->|text-to-speech| Piper
+
+  Agent -->|OpenAI-compatible API| Llama

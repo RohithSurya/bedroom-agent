@@ -1,0 +1,21 @@
+flowchart LR
+  User["User\nvoice or app request"]
+
+  subgraph Jetson["Jetson Orin Nano Super"]
+    HA["Home Assistant + Assist\nentrypoint + device control"]
+    Voice["Local speech stack\nfaster-whisper + piper"]
+    Agent["bedroom-agent\nrouting + policy + execution"]
+    LLM["Local LLM\nMinistral 3B via llama.cpp"]
+    Memory["SQLite memory\npreferences + events + room state"]
+    Inputs["Camera + Zigbee sensors\nroom context"]
+    Devices["Room devices\nlights fan AC speaker"]
+  end
+
+  User --> HA
+  HA <--> Voice
+  HA <--> Agent
+  Inputs --> Agent
+  Agent <--> LLM
+  Agent <--> Memory
+  HA --> Devices
+  Devices -. room changes + spoken reply .-> User

@@ -644,10 +644,8 @@ def _check_llm(agent: AgentAppState) -> dict[str, Any]:
         headers["Authorization"] = f"Bearer {api_key}"
 
     candidates = [
-        f"{base_url}/v1/models",
         f"{base_url}/models",
         f"{base_url}/health",
-        f"{base_url}/healthz",
     ]
 
     last_error = None

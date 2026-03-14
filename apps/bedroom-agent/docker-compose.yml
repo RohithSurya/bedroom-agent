@@ -1,12 +1,11 @@
 services:
   bedroom-agent:
-    env_file:
-    - .env
     container_name: bedroom-agent
     build: .
+    env_file:
+      - .env
     restart: unless-stopped
-    ports:
-      - "9000:9000"
+    network_mode: host
 
     # This makes "host.docker.internal" work on Linux (Jetson),
     # so you don’t hardcode 10.0.0.xxx anywhere.
@@ -15,31 +14,28 @@ services:
 
     environment:
       TZ: America/New_York
+      PYTHONPATH: "/app/src"
       HA_BASE_URL: "http://host.docker.internal:8123"
-      LLM_BASE_URL: "http://host.docker.internal:8081/v1"
+      LLM_BASE_URL: "http://localhost:8081/v1"
       MQTT_HOST: "host.docker.internal"
       MQTT_PORT: "1883"
       SQLITE_PATH: "/data/memory.sqlite"
+      LOG_DIR: "/logs"
       CAMERA_MODE: "file"
       CAMERA_ENTITY_ID: ""
-      VISION_FALLBACK_IMAGE_PATH: "/data/demo-bedroom.jpg"
+      VISION_FALLBACK_IMAGE_PATH: "/data/bedroom-latest.jpg"
+      VISION_DEBUG_SAVE_DIR: "/data/debug"
       VISION_ANALYSIS_ENABLED: "true"
       VISION_PROMPT_PROFILE: "general"
 
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/readyz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 15s
 
-
     volumes:
       - ./data:/data
-
-    # # Optional: only if you have /healthz implemented
-    # healthcheck:
-    #   test: ["CMD-SHELL", "curl -fsS http://localhost:9000/healthz || exit 1"]
-    #   interval: 30s
-    #   timeout: 3s
-    #   retries: 5
+      - ./logs:/logs
+      - ./src:/app/src

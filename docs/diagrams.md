@@ -4,9 +4,11 @@ These Mermaid sources describe the current implementation, not the earlier conce
 
 ## System Architecture
 
+- `hackathon_demo_architecture.mmd`: simplest high-level demo diagram for judges, showing the user flow, on-device intelligence, room context, and device actions
 - `architecture.mmd`: full system view across Home Assistant, the FastAPI agent, storage, MQTT, camera input, and LLM providers
 - `agent_runtime_class.mmd`: internal object model for `AgentAppState`, `Orchestrator`, `ActionFactory`, `Runner`, and `ToolBehaviorRegistry`
 - `physical_integration.mmd`: room hardware, sensors, switches, gateways, and control paths
+- `jetson_runtime.mmd`: simple Jetson Orin Nano Super deployment view showing on-device Docker containers and the local `llama.cpp` service
 - `container_services.mmd`: Docker containers, host services, and runtime interactions across the deployed stacks
 
 ## Request and Action Flows
@@ -21,6 +23,8 @@ These Mermaid sources describe the current implementation, not the earlier conce
 
 ## Notes
 
+- `hackathon_demo_architecture.mmd` is the best one-slide diagram for a judge or demo walkthrough.
+- `jetson_runtime.mmd` is the quickest diagram if you only want to see what runs on the Jetson itself.
 - `container_services.mmd` is the best diagram for Docker-level deployment topology.
 - `physical_integration.mmd` is the best diagram for the real-world device and switch wiring.
 - `voice_chat_flow.mmd` is the best diagram to start with if you want the top-level request lifecycle.
