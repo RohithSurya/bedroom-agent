@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -54,6 +54,20 @@ def parse_presence(payload: dict[str, Any]) -> Optional[bool]:
     return None
 
 
+def _normalize_topics(raw_topics: str | Iterable[str]) -> tuple[str, ...]:
+    if isinstance(raw_topics, str):
+        candidates = raw_topics.split(",")
+    else:
+        candidates = raw_topics
+
+    topics: list[str] = []
+    for candidate in candidates:
+        topic = str(candidate).strip()
+        if topic and topic not in topics:
+            topics.append(topic)
+    return tuple(topics)
+
+
 def _in_quiet_hours(tz_name: str, start_hhmm: str, end_hhmm: str) -> bool:
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz).time()
@@ -76,7 +90,7 @@ class Z2MMqttListener:
     mqtt_username: str | None
     mqtt_password: str | None
 
-    door_topic: str
+    door_topics: str | tuple[str, ...] | list[str]
     presence_topic: str
 
     tz_name: str
@@ -97,6 +111,13 @@ class Z2MMqttListener:
     _client: mqtt.Client | None = None
     _vacancy_timer: threading.Timer | None = field(default=None, init=False, repr=False)
     _timer_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.door_topics = _normalize_topics(self.door_topics)
+
+    @property
+    def door_topic(self) -> str:
+        return self.door_topics[0] if self.door_topics else ""
 
     def start(self) -> None:
         client = mqtt.Client(client_id=f"bedroom-agent-{int(time.time())}", clean_session=True)
@@ -129,11 +150,17 @@ class Z2MMqttListener:
     def _on_connect(self, client: mqtt.Client, userdata: Any, flags: dict, rc: int) -> None:
         # Subscribe only to the topics we care about (fast + low noise)
         self.connected = rc == 0
-        client.subscribe(self.door_topic)
+        for topic in self.door_topics:
+            client.subscribe(topic)
         client.subscribe(self.presence_topic)
         self.kv.append_event(
             "mqtt_connected",
-            {"rc": rc, "door_topic": self.door_topic, "presence_topic": self.presence_topic},
+            {
+                "rc": rc,
+                "door_topic": self.door_topic,
+                "door_topics": list(self.door_topics),
+                "presence_topic": self.presence_topic,
+            },
         )
 
     def _on_disconnect(self, client: mqtt.Client, userdata: Any, rc: int) -> None:
@@ -147,9 +174,7 @@ class Z2MMqttListener:
         except Exception:
             return
 
-        now = time.time()
-
-        if topic == self.door_topic:
+        if topic in self.door_topics:
             door_open = parse_door_open(payload)
             if door_open is None:
                 return

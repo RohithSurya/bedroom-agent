@@ -32,6 +32,15 @@ from memory.tiered_memory import TieredMemory
 from memory.preference_feedback import PreferenceFeedback
 
 
+def _parse_topic_list(raw_topics: str) -> tuple[str, ...]:
+    topics: list[str] = []
+    for candidate in str(raw_topics or "").split(","):
+        topic = candidate.strip()
+        if topic and topic not in topics:
+            topics.append(topic)
+    return tuple(topics)
+
+
 class AgentRunRequest(BaseModel):
     intent: Literal[
         "fan_on",
@@ -127,7 +136,7 @@ class AgentAppState:
             mqtt_port=int(settings.MQTT_PORT),
             mqtt_username=settings.MQTT_USERNAME,
             mqtt_password=settings.MQTT_PASSWORD,
-            door_topic=settings.Z2M_DOOR_TOPIC,
+            door_topics=_parse_topic_list(settings.Z2M_DOOR_TOPIC),
             presence_topic=settings.Z2M_PRESENCE_TOPIC,
             tz_name=settings.TIMEZONE,
             quiet_start=settings.QUIET_HOURS_START,
@@ -624,6 +633,7 @@ def _check_mqtt(agent: AgentAppState) -> dict[str, Any]:
         "host": mqtt_listener.mqtt_host,
         "port": mqtt_listener.mqtt_port,
         "door_topic": mqtt_listener.door_topic,
+        "door_topics": list(mqtt_listener.door_topics),
         "presence_topic": mqtt_listener.presence_topic,
     }
 

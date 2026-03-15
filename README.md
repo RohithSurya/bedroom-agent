@@ -664,6 +664,7 @@ Common variables:
 - `LLM_BASE_URL`, `LLM_MODEL`, `OPENAI_API_KEY`
 - `LLM_DECISION_ENABLED`, `LLM_DECISION_TIMEOUT_S`, `LLM_DECISION_MIN_CONFIDENCE`
 - `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, `Z2M_PRESENCE_TOPIC`
+  `Z2M_DOOR_TOPIC` can be a comma-separated list when multiple door sensors should share the same entry logic.
 - `SQLITE_PATH`
 - `CAMERA_MODE=device|ha_snapshot|file`
 - `VISION_ANALYSIS_ENABLED`, `VISION_FALLBACK_IMAGE_PATH`
