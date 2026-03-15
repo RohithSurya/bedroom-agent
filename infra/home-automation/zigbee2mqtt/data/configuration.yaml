@@ -29,3 +29,7 @@ devices:
     friendly_name: humidifier_plug
   '0xffffb40e0607569f':
     friendly_name: bedlamp_plug
+  '0xa4c138e904c74c7c':
+    friendly_name: bathroom_door_sensor
+  '0xa4c13866097bd100':
+    friendly_name: bathroom_light_switch
