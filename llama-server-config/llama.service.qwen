@@ -1,0 +1,46 @@
+[Unit]
+Description=llama.cpp server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rosurya
+WorkingDirectory=/home/rosurya/llama.cpp
+
+# If you need env vars, add them here:
+# Environment="LLAMA_LOG_LEVEL=info"
+# Model repo: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF
+# Runtime profile for this host:
+# - Language model: `Qwen3.5-4B-Q4_K_M.gguf`
+# - Vision projector: `mmproj-BF16.gguf`
+# - Throughput: about 12 tokens/sec
+#
+# We intentionally leave KV-cache tuning at the default settings here.
+# Earlier experiments with custom KV-cache options made tool calls less
+# reliable and increased hallucinations.
+#
+# If latency or VRAM pressure becomes a problem, switch to
+# `Qwen3.5-4B-Q3_K_M.gguf`. The current Q4_K_M build already fills VRAM and
+# can spill into swap on this machine.
+
+ExecStart=/home/rosurya/llama.cpp/build/bin/llama-server \
+  --model /home/rosurya/models/unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf \
+  --mmproj /home/rosurya/models/unsloth/Qwen3.5-4B-GGUF/mmproj-BF16.gguf \
+   --ctx-size 2048 \
+    --temp 1.0 \
+    --top-p 0.95 \
+    --top-k 20 \
+    --min-p 0.00 \
+    --alias "unsloth/Qwen3.5-4B-GGUF" \
+    --port 8081 \
+    --flash-attn on \
+    --chat-template-kwargs '{"enable_thinking":true}' \
+    -ngl 99
+
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

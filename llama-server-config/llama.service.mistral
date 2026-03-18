@@ -1,0 +1,29 @@
+[Unit]
+Description=llama.cpp server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rosurya
+WorkingDirectory=/home/rosurya/llama.cpp
+
+# If you need env vars, add them here:
+# Environment="LLAMA_LOG_LEVEL=info"
+
+ExecStart=/home/rosurya/llama.cpp/build/bin/llama-server \
+  --model /home/rosurya/models/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf \
+  --mmproj /home/rosurya/models/Ministral-3-3B-Instruct-2512-BF16-mmproj.gguf \
+  --chat-template-file /home/rosurya/models/ministral3_chat_template.jinja \
+  --jinja \
+  -c 2048 \
+  --flash-attn on \
+  --batch-size 64 \
+  --port 8081 \
+  -ngl 99
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
