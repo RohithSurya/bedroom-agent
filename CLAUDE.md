@@ -62,10 +62,14 @@ Input (HTTP /agent/run or /agent/chat)
 - `runner.py` — Executes tool plans; handles retry, circuit breaker, deadline budget, and verification reads
 - `decision_engine.py` — LLM-based decision making for ambiguous requests
 - `mqtt_listener.py` — MQTT subscriber for door/presence sensor events; drives entry/vacancy automation
+- `actions.py` — AgentAction protocol and concrete action types
+- `status_service.py` — Handles `status` intent; room status summaries
+- `tool_behaviors.py` — Verification and retry logic per tool type
 
 **`src/memory/`**
 - `sqlite_kv.py` — Namespaced SQLite KV store (namespaces: `belief`, `prefs`, `vision`, `decision`, `status`, `episodes`)
 - `tiered_memory.py` — Aggregates preferences and episode summaries for LLM context
+- `preference_feedback.py` — Applies user preference feedback from chat
 
 **`src/tools/`**
 - `tool_executor.py` — Local mock backend (used in dev/tests)
@@ -82,7 +86,7 @@ Input (HTTP /agent/run or /agent/chat)
 
 ### Intents
 
-Defined in `agent/intent_registry.py`: `fan_on`, `fan_off`, `enter_room`, `sleep_mode`, `focus_start`, `focus_end`, `comfort_adjust`, `no_action`, `analyze_bedroom`, `decision_request`
+Defined in `agent/intent_registry.py`: `fan_on`, `fan_off`, `enter_room`, `sleep_mode`, `focus_start`, `focus_end`, `comfort_adjust`, `no_action`, `analyze_bedroom`, `decision_request`, `status`
 
 ### Data Flow for Sensor Events
 
@@ -114,17 +118,6 @@ Three services:
 - **mosquitto** — MQTT broker (port 1883 MQTT, 9001 WebSocket); anonymous access; persistence enabled
 - **zigbee2mqtt** — Zigbee-to-MQTT bridge via ZBT-2 USB dongle; depends on mosquitto
 
-**`ha_config/` key files:**
-- `configuration.yaml` — REST commands to `/agent/run` & `/agent/chat`; template fan entity (`bedroom_fan`); SmartIR climate for Broadlink RM4 Mini (AC device 1390)
-- `automations.yaml` — Voice chat trigger (HA Assist → `/agent/chat`); fan automations; allow/deny policy handling
-- `scripts.yaml` — `agent_fan_on_request`, `agent_fan_off_request`, and other per-intent scripts
-- `secrets.yaml` — API tokens (excluded from git)
-
-**`ha_config/custom_components/`:**
-- `etekcity_fitness_scale_ble/` (v0.4.1) — BLE presence detection via Etekcity fitness scale
-- `smartir/` (v1.18.1) — IR blaster control (AC/fan/media) via Broadlink RM4 Mini
-- `hacs/` (v2.0.5) — Home Assistant Community Store
-
 ### `wyoming/` *(required for voice)*
 
 ```bash
@@ -136,101 +129,37 @@ cd wyoming && docker compose up -d
 
 Data flow: faster-whisper → HA Assist → `bedroom_agent_voice_chat` automation → `/agent/chat`
 
-### `infra/jetson/`
-
-- `setup.md` — Placeholder for Jetson Orin setup (kernel config, CUDA, llama.cpp build)
-
-### `mock_ha/`
-
-FastAPI mock of HA for integration testing (port 8123). Implements `/tool/light.set`, `/tool/fan.set`, `/tool/switch.set`, `/tool/tts.say` with failure injection via `/failures/inject`. Use instead of real HA during tests.
-
 ### `evals/`
 
 Scenario-based evaluation harness for the full Orchestrator → Runner pipeline:
 - `harness.py` — Loads YAML scenarios, advances simulated time, compares expected vs actual tool calls
 - `ab_report.py` — A/B comparison reports with deterministic cooldown replay
-- `scenarios/` — 18 YAML test cases (fan control, sleep mode, cooldowns, guest mode, presence gates, retry, idempotency)
-
-### `docs/`
-
-Runbook, API contracts, architecture diagrams.
+- `scenarios/` — 17 YAML test cases (fan control, sleep mode, cooldowns, guest mode, presence gates, retry, idempotency)
 
 ## Validation Cycle
 
-Run this sequence after any significant change to verify the full stack is healthy.
-
-### 1. Verify Docker services (all except bedroom-agent)
+Primary workflow — run after any significant change:
 
 ```bash
-# Root stack
-docker compose ps
-
-# Infra stack
-cd infra/home-automation && docker compose ps
-
-# Wyoming stack
-cd wyoming && docker compose ps
+./apps/bedroom-agent/dev-check.sh
 ```
 
-Expected: `homeassistant`, `mosquitto`, `zigbee2mqtt`, `faster-whisper`, `wyoming-piper` all up.
-
-### 2. Reload / restart Home Assistant
+This reloads HA, restarts the agent, and runs the test suite. For manual checks:
 
 ```bash
-HA_TOKEN=$(grep HA_TOKEN apps/bedroom-agent/.env | cut -d= -f2)
+# Verify all Docker services are up
+docker compose ps && cd infra/home-automation && docker compose ps && cd ../../wyoming && docker compose ps
 
-# Option A: Reload automations + scripts only (< 1s, after automations.yaml / scripts.yaml edits)
+# HA reload (automations/scripts only — fast)
+HA_TOKEN=$(grep HA_TOKEN apps/bedroom-agent/.env | cut -d= -f2)
 curl -sf -X POST http://localhost:8123/api/services/automation/reload \
   -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" -d '{}'
 curl -sf -X POST http://localhost:8123/api/services/script/reload \
   -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" -d '{}'
 
-# Option B: Restart HA core only (seconds, after configuration.yaml edits — no container restart)
-curl -sf -X POST http://localhost:8123/api/services/homeassistant/restart \
-  -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" -d '{}'
-
-# Option C: Full container restart (slow, ~30s — only needed for custom component changes)
-cd infra/home-automation && docker compose restart homeassistant
-```
-
-### 3. Stop Docker bedroom-agent and run locally
-
-```bash
-# Stop docker bedroom-agent (avoids port 9000 conflict)
-docker compose stop bedroom-agent
-
-# Run locally from apps/bedroom-agent/
-cd apps/bedroom-agent && source .venv/bin/activate
-TOOL_BACKEND=local VISION_ANALYSIS_ENABLED=false \
-  uvicorn src.app:app --host 0.0.0.0 --port 9000 --reload
-```
-
-Expected startup output: `Application startup complete.` — no errors or warnings.
-
-### 4. Run tests
-
-```bash
-cd apps/bedroom-agent && source .venv/bin/activate
-./.venv/bin/pytest tests -q
+# Health checks
+curl -sf http://localhost:9000/health | python3 -m json.tool
+curl -sf http://localhost:8123/api/ -H "Authorization: Bearer $HA_TOKEN" | python3 -m json.tool
 ```
 
 Expected: all 79 tests pass.
-
-### 5. Health checks
-
-```bash
-# Load HA token
-HA_TOKEN=$(grep HA_TOKEN apps/bedroom-agent/.env | cut -d= -f2)
-
-# bedroom-agent
-curl -sf http://localhost:9000/health | python3 -m json.tool
-# Expected: {"ok": true, "mode": "active", "backend": "local"}
-
-# Home Assistant (use token from apps/bedroom-agent/.env)
-curl -sf http://localhost:8123/api/ -H "Authorization: Bearer $HA_TOKEN" | python3 -m json.tool
-# Expected: {"message": "API running."}
-
-# Mosquitto
-docker exec $(docker ps -qf name=mosquitto) mosquitto_pub -h localhost -t test -m ping
-# Expected: exits 0 (no output)
-```
