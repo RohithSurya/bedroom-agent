@@ -1,0 +1,8 @@
+# Top-level compose — starts all services in dependency order.
+# Usage: docker compose up -d
+#        docker compose up --build -d   (to rebuild bedroom-agent)
+
+include:
+  - infra/home-automation/docker-compose.yaml
+  - wyoming/docker-compose.yaml
+  - apps/bedroom-agent/docker-compose.yml

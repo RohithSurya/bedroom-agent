@@ -29,9 +29,13 @@ TOOL_BACKEND=local VISION_ANALYSIS_ENABLED=false \
 ./.venv/bin/pytest tests/test_nl_router.py -q
 ```
 
-Docker deployment:
+Docker deployment (all services):
 ```bash
-cd apps/bedroom-agent && docker compose up --build -d
+# From repo root — starts HA, Mosquitto, Zigbee2MQTT, Wyoming STT/TTS, and bedroom-agent
+docker compose up -d
+
+# To rebuild bedroom-agent image
+docker compose up --build -d
 ```
 
 ## Architecture
@@ -94,9 +98,56 @@ The LLM service is managed by systemd (`llm.service`) and configured in `llama-s
 
 ## Infra Layout
 
-- `infra/home-automation/` — Home Assistant config (automations, scripts, scenes, Zigbee2MQTT)
-- `infra/jetson/` — Jetson Orin setup scripts
-- `wyoming/` — faster-whisper (STT) + piper-tts (TTS) docker services
-- `mock_ha/` — Mock Home Assistant for integration testing
-- `evals/` — Evaluation harnesses
-- `docs/` — Runbook, API contracts, architecture diagrams
+> **The infra Docker stacks are required to run bedroom-agent in active mode.** Bring up `infra/home-automation/` and `wyoming/` before starting the agent. Only `TOOL_BACKEND=local` bypasses this for local dev/testing.
+
+### `infra/home-automation/` *(required)*
+
+```bash
+cd infra/home-automation && docker compose up -d
+```
+
+Three services:
+- **homeassistant** — HA instance (port 8123, host network, privileged); REST command endpoints for agent at 10.0.0.179:9000
+- **mosquitto** — MQTT broker (port 1883 MQTT, 9001 WebSocket); anonymous access; persistence enabled
+- **zigbee2mqtt** — Zigbee-to-MQTT bridge via ZBT-2 USB dongle; depends on mosquitto
+
+**`ha_config/` key files:**
+- `configuration.yaml` — REST commands to `/agent/run` & `/agent/chat`; template fan entity (`bedroom_fan`); SmartIR climate for Broadlink RM4 Mini (AC device 1390)
+- `automations.yaml` — Voice chat trigger (HA Assist → `/agent/chat`); fan automations; allow/deny policy handling
+- `scripts.yaml` — `agent_fan_on_request`, `agent_fan_off_request`, and other per-intent scripts
+- `secrets.yaml` — API tokens (excluded from git)
+
+**`ha_config/custom_components/`:**
+- `etekcity_fitness_scale_ble/` (v0.4.1) — BLE presence detection via Etekcity fitness scale
+- `smartir/` (v1.18.1) — IR blaster control (AC/fan/media) via Broadlink RM4 Mini
+- `hacs/` (v2.0.5) — Home Assistant Community Store
+
+### `wyoming/` *(required for voice)*
+
+```bash
+cd wyoming && docker compose up -d
+```
+
+- **faster-whisper** — STT; auto language detection; models at `/share/whisper`
+- **wyoming-piper** — TTS; English US male voice (`en_US-hfc_male-medium`)
+
+Data flow: faster-whisper → HA Assist → `bedroom_agent_voice_chat` automation → `/agent/chat`
+
+### `infra/jetson/`
+
+- `setup.md` — Placeholder for Jetson Orin setup (kernel config, CUDA, llama.cpp build)
+
+### `mock_ha/`
+
+FastAPI mock of HA for integration testing (port 8123). Implements `/tool/light.set`, `/tool/fan.set`, `/tool/switch.set`, `/tool/tts.say` with failure injection via `/failures/inject`. Use instead of real HA during tests.
+
+### `evals/`
+
+Scenario-based evaluation harness for the full Orchestrator → Runner pipeline:
+- `harness.py` — Loads YAML scenarios, advances simulated time, compares expected vs actual tool calls
+- `ab_report.py` — A/B comparison reports with deterministic cooldown replay
+- `scenarios/` — 18 YAML test cases (fan control, sleep mode, cooldowns, guest mode, presence gates, retry, idempotency)
+
+### `docs/`
+
+Runbook, API contracts, architecture diagrams.
