@@ -27,6 +27,9 @@ TOOL_BACKEND=local VISION_ANALYSIS_ENABLED=false \
 
 # Test (single file)
 ./.venv/bin/pytest tests/test_nl_router.py -q
+
+# Dev validation (reload HA, restart agent, run tests)
+./apps/bedroom-agent/dev-check.sh
 ```
 
 Docker deployment (all services):
@@ -151,3 +154,83 @@ Scenario-based evaluation harness for the full Orchestrator → Runner pipeline:
 ### `docs/`
 
 Runbook, API contracts, architecture diagrams.
+
+## Validation Cycle
+
+Run this sequence after any significant change to verify the full stack is healthy.
+
+### 1. Verify Docker services (all except bedroom-agent)
+
+```bash
+# Root stack
+docker compose ps
+
+# Infra stack
+cd infra/home-automation && docker compose ps
+
+# Wyoming stack
+cd wyoming && docker compose ps
+```
+
+Expected: `homeassistant`, `mosquitto`, `zigbee2mqtt`, `faster-whisper`, `wyoming-piper` all up.
+
+### 2. Reload / restart Home Assistant
+
+```bash
+HA_TOKEN=$(grep HA_TOKEN apps/bedroom-agent/.env | cut -d= -f2)
+
+# Option A: Reload automations + scripts only (< 1s, after automations.yaml / scripts.yaml edits)
+curl -sf -X POST http://localhost:8123/api/services/automation/reload \
+  -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" -d '{}'
+curl -sf -X POST http://localhost:8123/api/services/script/reload \
+  -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" -d '{}'
+
+# Option B: Restart HA core only (seconds, after configuration.yaml edits — no container restart)
+curl -sf -X POST http://localhost:8123/api/services/homeassistant/restart \
+  -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" -d '{}'
+
+# Option C: Full container restart (slow, ~30s — only needed for custom component changes)
+cd infra/home-automation && docker compose restart homeassistant
+```
+
+### 3. Stop Docker bedroom-agent and run locally
+
+```bash
+# Stop docker bedroom-agent (avoids port 9000 conflict)
+docker compose stop bedroom-agent
+
+# Run locally from apps/bedroom-agent/
+cd apps/bedroom-agent && source .venv/bin/activate
+TOOL_BACKEND=local VISION_ANALYSIS_ENABLED=false \
+  uvicorn src.app:app --host 0.0.0.0 --port 9000 --reload
+```
+
+Expected startup output: `Application startup complete.` — no errors or warnings.
+
+### 4. Run tests
+
+```bash
+cd apps/bedroom-agent && source .venv/bin/activate
+./.venv/bin/pytest tests -q
+```
+
+Expected: all 79 tests pass.
+
+### 5. Health checks
+
+```bash
+# Load HA token
+HA_TOKEN=$(grep HA_TOKEN apps/bedroom-agent/.env | cut -d= -f2)
+
+# bedroom-agent
+curl -sf http://localhost:9000/health | python3 -m json.tool
+# Expected: {"ok": true, "mode": "active", "backend": "local"}
+
+# Home Assistant (use token from apps/bedroom-agent/.env)
+curl -sf http://localhost:8123/api/ -H "Authorization: Bearer $HA_TOKEN" | python3 -m json.tool
+# Expected: {"message": "API running."}
+
+# Mosquitto
+docker exec $(docker ps -qf name=mosquitto) mosquitto_pub -h localhost -t test -m ping
+# Expected: exits 0 (no output)
+```
