@@ -9,12 +9,13 @@ from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 from pathlib import Path
 
+from agent.classifier import Classifier
 from agent.decision_engine import DecisionEngine
 from agent.mqtt_listener import Z2MMqttListener
+from agent.pipeline import run_chat_pipeline
 from agent.status_service import StatusService
 from memory.sqlite_kv import SqliteKV
 from agent.orchestrator import Orchestrator
-from agent.nl_router import NLRouter
 from agent.runner import Runner
 from contracts.ha import ToolCall
 from core.config import Settings
@@ -30,6 +31,8 @@ from vision.room_analyzer import BedroomRoomAnalyzer
 from reliability.deadline import Deadline
 from memory.tiered_memory import TieredMemory
 from memory.preference_feedback import PreferenceFeedback
+from memory.reflection import EpisodeReflector
+from memory.session import SessionStore
 
 
 def _parse_topic_list(raw_topics: str) -> tuple[str, ...]:
@@ -62,12 +65,11 @@ class AgentChatRequest(BaseModel):
     This is what you'll call from:
     - Home Assistant webhook (Siri -> scene -> webhook)
     - a simple web chat UI
-
-    Keep it minimal for hackathon reliability.
     """
 
     text: str
     state: dict[str, Any] = Field(default_factory=dict)
+    session_id: str | None = None
 
 
 class AgentAppState:
@@ -92,8 +94,9 @@ class AgentAppState:
             if bool(settings.LLM_DECISION_ENABLED)
             else None
         )
-        self.router = NLRouter(llm=self.llm)
         self.kv = SqliteKV(settings.SQLITE_PATH)
+        self.classifier = Classifier(llm=self.llm, kv=self.kv)
+        self.session_store = SessionStore(kv=self.kv)
         self.memory = TieredMemory(kv=self.kv)
         self.preference_feedback = PreferenceFeedback(kv=self.kv)
         self.status_service = StatusService(kv=self.kv, llm=self.llm, tz_name=settings.TIMEZONE)
@@ -124,6 +127,7 @@ class AgentAppState:
             use_vision=bool(settings.LLM_DECISION_USE_VISION),
         )
 
+        self.reflector = EpisodeReflector(kv=self.kv, llm=self.llm)
         self.orchestrator = Orchestrator(cooldowns=cooldowns)
         self.runner = Runner(
             executor=_build_executor(settings, logger=self.logger),
@@ -759,295 +763,44 @@ def run_agent(req: AgentRunRequest) -> dict[str, Any]:
 
 @app.post("/agent/chat")
 def chat(req: AgentChatRequest) -> dict[str, Any]:
-    """Natural language endpoint.
-
-    For hackathon scope:
-    - route text -> intent
-    - reuse existing policy+runner pipeline
-    - return info about routing + execution for better observability"""
+    """Natural language endpoint — unified classifier → orchestrator → runner pipeline."""
     try:
-        deadline = Deadline.from_now(app.state.agent.settings.REQUEST_BUDGET_S)
-        t0 = time.perf_counter()
-        intent, args = app.state.agent.router.route(text=req.text, state={})
-        last_episode = app.state.agent.memory.get_last_episode()
-        feedback_result = app.state.agent.preference_feedback.apply(
-            user_text=req.text,
-            last_episode=last_episode,
-        )
-        if feedback_result is not None:
-            return {
-                "mode": "memory_update",
-                "message": feedback_result["message"],
-                "updates": feedback_result["updates"],
-                "last_intent": feedback_result["intent_scope"],
-            }
-        t_nl_router = time.perf_counter()
+        agent = app.state.agent
+        deadline = Deadline.from_now(agent.settings.REQUEST_BUDGET_S)
 
-        t_before_state = time.perf_counter()
-        state = app.state.agent.build_runtime_state(req.state, intent=intent, user_text=req.text)
-        t_state = time.perf_counter()
-
-        if intent == "status":
-            result = app.state.agent.status_service.handle_query(
-                args.get("query", req.text),
-                runtime_state=state,
-            )
-            t_status = time.perf_counter()
-            return {
-                "mode": "info",
-                "input": {"text": req.text, "intent": intent, "args": args},
-                "result": result,
-                "timings_ms": {
-                    "nl_router": round((t_nl_router - t0) * 1000, 1),
-                    "state": round((t_state - t_before_state) * 1000, 1),
-                    "status_service": round((t_status - t_state) * 1000, 1),
-                },
-            }
-
-        if intent == "analyze_bedroom":
-            result = app.state.agent.room_analyzer.analyze(req.text)
-            t_analyze_bedroom = time.perf_counter()
-            return {
-                "mode": "info",
-                "input": {"text": req.text, "intent": intent, "args": args},
-                "result": result,
-                "timings_ms": {
-                    "nl_router": round((t_nl_router - t0) * 1000, 1),
-                    "analyze_bedroom": round((t_analyze_bedroom - t_nl_router) * 1000, 1),
-                },
-            }
-        if intent == "decision_request":
-            agent = app.state.agent
-            agent.kv.append_event(
-                "llm_decision_requested",
-                {
-                    "source": "user_chat",
-                    "trigger": "chat_request",
-                    "user_text": req.text,
-                    "temperature_c": state.get("temperature_c"),
-                    "humidity_pct": state.get("humidity_pct"),
-                },
-            )
-            choice = agent.decision_engine.choose_intent(
-                source="user_chat",
-                trigger="chat_request",
-                user_text=req.text,
-                state=state,
-            )
-            t_decision = time.perf_counter()
-            decision_record = {
-                "intent": choice.intent,
-                "confidence": choice.confidence,
-                "rationale": choice.rationale,
-                "reasoning_tags": choice.reasoning_tags,
-                "fallback_used": choice.fallback_used,
-                "trace": choice.trace,
-            }
-            agent.kv.append_event(
-                "llm_decision_returned",
-                {
-                    "source": choice.source,
-                    "trigger": choice.trigger,
-                    "user_text": req.text,
-                    "chosen_intent": choice.intent,
-                    "confidence": choice.confidence,
-                    "rationale": choice.rationale,
-                    "reasoning_tags": choice.reasoning_tags,
-                    "fallback_used": choice.fallback_used,
-                    "temperature_c": state.get("temperature_c"),
-                    "humidity_pct": state.get("humidity_pct"),
-                    "ac_available": state.get("ac_available"),
-                    "trace": choice.trace,
-                },
-            )
-            agent.kv.set(
-                "decision",
-                "last_trace",
-                choice.trace,
-            )
-            agent.kv.set(
-                "decision",
-                "last_choice",
-                decision_record,
-            )
-            if choice.fallback_used:
-                agent.kv.append_event(
-                    "llm_decision_fallback_used",
-                    {"user_text": req.text, "chosen_intent": choice.intent},
-                )
-
-            if choice.intent == "no_action":
-                agent.kv.append_event(
-                    "llm_intent_executed",
-                    {"chosen_intent": choice.intent, "executed_tools": [], "success": True},
-                )
-                agent.record_episode(
-                    user_text=req.text,
-                    intent=choice.intent,
-                    state=state,
-                    decision={"decision": "allow", "reason": "no_action"},
-                    actions=[],
-                    execution={"success": True, "failures": [], "executed_tools": []},
-                    memory_hits=list(state.get("relevant_prefs", {}).keys()),
-                )
-                return {
-                    "mode": "action",
-                    "input": {"text": req.text, "intent": intent, "args": args},
-                    "decision": {
-                        "chosen_intent": choice.intent,
-                        "confidence": choice.confidence,
-                        "rationale": choice.rationale,
-                        "reasoning_tags": choice.reasoning_tags,
-                        "fallback_used": choice.fallback_used,
-                        "trace": choice.trace,
-                    },
-                    "policy": {"decision": "allow", "reason": "no_action"},
-                    "actions": [],
-                    "execution": {"success": True, "failures": [], "executed_tools": []},
-                    "timings_ms": {
-                        "nl_router": round((t_nl_router - t0) * 1000, 1),
-                        "state": round((t_state - t_before_state) * 1000, 1),
-                        "decision": round((t_decision - t_state) * 1000, 1),
-                    },
-                }
-
-            plan = agent.orchestrator.handle_request(
-                intent=choice.intent, args=choice.args, state=state
-            )
-            t_plan = time.perf_counter()
-            policy = plan["decision"].model_dump()
-            if plan["decision"].decision == "deny":
-                agent.kv.append_event(
-                    "llm_intent_rejected_by_policy",
-                    {
-                        "chosen_intent": choice.intent,
-                        "reason": plan["decision"].reason,
-                        "temperature_c": state.get("temperature_c"),
-                        "humidity_pct": state.get("humidity_pct"),
-                    },
-                )
-
-            execution = agent.runner.execute_actions(
-                correlation_id=plan["correlation_id"],
-                actions=plan["actions"],
-                cooldown_key=plan.get("cooldown_key"),
-                cooldown_seconds=int(plan.get("cooldown_seconds", 0)),
-                deadline=deadline,
-            )
-            agent.record_episode(
-                user_text=req.text,
-                intent=choice.intent,
-                state=state,
-                decision=policy,
-                actions=[a.model_dump() for a in plan["actions"]],
-                execution=execution,
-                memory_hits=list(state.get("relevant_prefs", {}).keys()),
-            )
-            t_exec = time.perf_counter()
-            agent.kv.append_event(
-                "llm_intent_executed",
-                {
-                    "chosen_intent": choice.intent,
-                    "policy_decision": policy["decision"],
-                    "policy_reason": policy["reason"],
-                    "executed_tools": execution.get("executed_tools", []),
-                    "success": execution.get("success", False),
-                },
-            )
-            return {
-                "mode": "action",
-                "input": {"text": req.text, "intent": intent, "args": args},
-                "decision": {
-                    "chosen_intent": choice.intent,
-                    "confidence": choice.confidence,
-                    "rationale": choice.rationale,
-                    "reasoning_tags": choice.reasoning_tags,
-                    "fallback_used": choice.fallback_used,
-                },
-                "policy": policy,
-                "actions": [a.model_dump() for a in plan["actions"]],
-                "execution": execution,
-                "timings_ms": {
-                    "nl_router": round((t_nl_router - t0) * 1000, 1),
-                    "state": round((t_state - t_before_state) * 1000, 1),
-                    "decision": round((t_decision - t_state) * 1000, 1),
-                    "plan": round((t_plan - t_decision) * 1000, 1),
-                    "exec": round((t_exec - t_plan) * 1000, 1),
-                },
-            }
-
-        plan = app.state.agent.orchestrator.handle_request(intent=intent, args=args, state=state)
-        app.state.agent.kv.set(
-            "decision",
-            "last_choice",
-            {
-                "intent": intent,
-                "confidence": 1.0,
-                "rationale": f"Direct router matched the request to {intent}.",
-                "reasoning_tags": ["router_direct", intent],
-                "fallback_used": False,
-            },
-        )
-        app.state.agent.kv.set(
-            "decision",
-            "last_trace",
-            {
-                "goal": req.text,
-                "selected_intent": intent,
-                "selected_because": f"The request was directly matched to {intent}.",
-                "reasoning_tags": ["router_direct", intent],
-                "memory_hits": list(state.get("relevant_prefs", {}).keys())[:5],
-                "episode_summary": str(state.get("episode_summary", "") or ""),
-                "signals": [
-                    f"presence={bool(state.get('presence', False))}",
-                    f"temperature_c={state.get('temperature_c')}",
-                    f"humidity_pct={state.get('humidity_pct')}",
-                    f"ac_available={bool(state.get('ac_available', False))}",
-                ],
-                "guardrails": [
-                    "guest_mode_on" if bool(state.get("guest_mode", False)) else "guest_mode_off",
-                    "sleep_mode_enable_climate"
-                    if bool(state.get("sleep_mode_enable_climate", False))
-                    else "sleep_mode_climate_disabled",
-                ],
-                "fallback_used": False,
-            },
-        )
-        t_plan = time.perf_counter()
-        execution = app.state.agent.runner.execute_actions(
-            correlation_id=plan["correlation_id"],
-            actions=plan["actions"],
-            cooldown_key=plan.get("cooldown_key"),
-            cooldown_seconds=int(plan.get("cooldown_seconds", 0)),
+        result = run_chat_pipeline(
+            text=req.text,
+            state_overrides=req.state,
+            agent=agent,
+            session_id=req.session_id,
             deadline=deadline,
         )
-        app.state.agent.record_episode(
-            user_text=req.text,
-            intent=intent,
-            state=state,
-            decision=plan["decision"].model_dump(),
-            actions=[a.model_dump() for a in plan["actions"]],
-            execution=execution,
-            memory_hits=list(state.get("relevant_prefs", {}).keys()),
-        )
-        t_exec = time.perf_counter()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return {
-        "mode": "action",
-        "input": {"text": req.text, "intent": intent, "args": args},
-        "correlation_id": plan["correlation_id"],
-        "decision": plan["decision"].model_dump(),
-        "actions": [a.model_dump() for a in plan["actions"]],
-        "execution": execution,
-        "timings_ms": {
-            "nl_router": round((t_nl_router - t0) * 1000, 1),
-            "state": round((t_state - t_before_state) * 1000, 1),
-            "plan": round((t_plan - t_state) * 1000, 1),
-            "exec": round((t_exec - t_plan) * 1000, 1),
-        },
+    # Build response dict from PipelineResult
+    response: dict[str, Any] = {
+        "mode": result.mode,
+        "input": result.input_info,
+        "session_id": result.session_id,
+        "timings_ms": result.timings_ms,
     }
+
+    if result.mode == "memory_update":
+        response["message"] = result.extra.get("message")
+        response["updates"] = result.extra.get("updates")
+        response["last_intent"] = result.extra.get("last_intent")
+    elif result.mode == "info":
+        response["result"] = result.extra.get("result")
+    elif result.mode == "action":
+        response["correlation_id"] = result.extra.get("correlation_id")
+        response["decision"] = result.decision
+        response["actions"] = result.actions
+        response["execution"] = result.execution
+        if result.extra.get("policy"):
+            response["policy"] = result.extra["policy"]
+
+    return response
 
 
 if __name__ == "__main__":

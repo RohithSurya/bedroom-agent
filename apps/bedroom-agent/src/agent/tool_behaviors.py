@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
+from agent.tool_registry import TOOL_DEFINITIONS
 from contracts.ha import ToolCall, ToolResult
 
 if TYPE_CHECKING:
@@ -27,9 +28,15 @@ class BaseToolBehavior:
         return self._verify_active(runner, call, result)
 
     def is_retryable(self, call: ToolCall) -> bool:
+        defn = TOOL_DEFINITIONS.get(call.tool)
+        if defn is not None:
+            return defn.retryable
         return True
 
     def is_verification_critical(self, call: ToolCall) -> bool:
+        defn = TOOL_DEFINITIONS.get(call.tool)
+        if defn is not None:
+            return defn.requires_verification
         return False
 
     def _verify_active(self, runner: Runner, call: ToolCall, result: ToolResult) -> dict[str, Any]:
@@ -37,8 +44,7 @@ class BaseToolBehavior:
 
 
 class LightSetBehavior(BaseToolBehavior):
-    def is_verification_critical(self, call: ToolCall) -> bool:
-        return True
+    # is_verification_critical and is_retryable delegate to TOOL_DEFINITIONS via BaseToolBehavior
 
     def _verify_active(self, runner: Runner, call: ToolCall, result: ToolResult) -> dict[str, Any]:
         entity_id = str(call.args.get("entity_id", "light.bedroom_light"))
@@ -127,8 +133,7 @@ class ClimateSetFanModeBehavior(BaseToolBehavior):
 
 
 class TtsSayBehavior(BaseToolBehavior):
-    def is_retryable(self, call: ToolCall) -> bool:
-        return False
+    # is_retryable delegates to TOOL_DEFINITIONS via BaseToolBehavior (retryable=False for tts.say)
 
     def _verify_active(self, runner: Runner, call: ToolCall, result: ToolResult) -> dict[str, Any]:
         msg = str(call.args.get("message", ""))

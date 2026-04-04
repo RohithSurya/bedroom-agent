@@ -95,7 +95,7 @@ class OpenAIClient:
         *,
         prompt: str,
         images_b64: Optional[list[str]] = None,
-        temperature: float = 0.2,
+        temperature: float = 0.7,
         num_predict: Optional[int] = None,
         schema: Optional[dict[str, Any]] = None,
     ) -> Any:
@@ -108,7 +108,15 @@ class OpenAIClient:
             kwargs["max_tokens"] = int(num_predict)
 
         if schema is None:
-            return self._client.chat.completions.create(**kwargs)
+            return self._client.chat.completions.create(
+                **kwargs,
+                top_p=0.8,
+                presence_penalty=1.5,
+                extra_body={
+                    "top_k": 20,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
+            )
 
         # Try strict JSON schema first, then fall back for compatibility.
         attempts = [
@@ -122,7 +130,12 @@ class OpenAIClient:
                 call_kwargs = dict(kwargs)
                 if response_format is not None:
                     call_kwargs["response_format"] = response_format
-                return self._client.chat.completions.create(**call_kwargs)
+                return self._client.chat.completions.create(
+                    **call_kwargs,
+                    extra_body={
+                        "chat_template_kwargs": {"enable_thinking": False},
+                    },
+                )
             except Exception as exc:
                 last_exc = exc
 

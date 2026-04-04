@@ -13,6 +13,7 @@ DECISION_INTENTS: tuple[str, ...] = (
     "no_action",
 )
 
+# Deprecated: use CLASSIFIER_INTENTS instead
 ROUTER_INTENTS: tuple[str, ...] = (
     "fan_on",
     "fan_off",
@@ -23,6 +24,19 @@ ROUTER_INTENTS: tuple[str, ...] = (
     "analyze_bedroom",
     "status",
     "decision_request",
+)
+
+CLASSIFIER_INTENTS: tuple[str, ...] = (
+    "fan_on",
+    "fan_off",
+    "sleep_mode",
+    "focus_start",
+    "focus_end",
+    "comfort_adjust",
+    "analyze_bedroom",
+    "status",
+    "preference_feedback",
+    "no_action",
 )
 
 DECISION_SCHEMA: dict[str, Any] = {
@@ -38,6 +52,19 @@ DECISION_SCHEMA: dict[str, Any] = {
     },
 }
 
+CLASSIFIER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["intent", "args"],
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": list(CLASSIFIER_INTENTS),
+        },
+        "args": {"type": "object"},
+    },
+}
+
 
 def is_decision_intent(intent: str) -> bool:
     return intent in DECISION_INTENTS
@@ -45,3 +72,7 @@ def is_decision_intent(intent: str) -> bool:
 
 def is_router_intent(intent: str) -> bool:
     return intent in ROUTER_INTENTS
+
+
+def is_classifier_intent(intent: str) -> bool:
+    return intent in CLASSIFIER_INTENTS
