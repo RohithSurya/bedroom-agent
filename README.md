@@ -415,12 +415,6 @@ flowchart TD
   EpisodesWriter --> Events
 ```
 
-### Sample Bedroom Image
-
-Tracked sample snapshot used for local bedroom-analysis development:
-
-![Sample bedroom snapshot](apps/bedroom-agent/data/bedroom-latest.jpg)
-
 ## Repository Layout
 
 - `apps/bedroom-agent`: main FastAPI service, agent logic, memory, tests, Docker config
