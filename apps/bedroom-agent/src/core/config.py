@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     SQLITE_PATH: str = "data/memory.sqlite"
 
     # MQTT (Zigbee2MQTT)
+    MQTT_ENABLED: bool = True  # false: run without a broker (local dev, demos)
     MQTT_HOST: str = "host.docker.internal"
     MQTT_PORT: int = 1883
     MQTT_USERNAME: str | None = None

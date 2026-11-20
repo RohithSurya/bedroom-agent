@@ -493,8 +493,9 @@ async def lifespan(app: FastAPI):
         for phrase in ["Fan on.", "Fan off.", "Denied.", "Guest mode."]:
             agent_state.runner.executor.prime_tts(phrase)
 
-    # Start MQTT listener
-    agent_state.mqtt.start()
+    # Start MQTT listener (sensor-driven automation); optional for local runs
+    if settings.MQTT_ENABLED:
+        agent_state.mqtt.start()
 
     try:
         yield
