@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "http://127.0.0.1:8081/v1"
     LLM_MODEL: str = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf"
     LLM_TIMEOUT_S: float = 60.0
+    # JSON object sent as chat_template_kwargs, e.g. {"reasoning_strength": "low"}
+    LLM_CHAT_TEMPLATE_KWARGS: str = '{"enable_thinking": false}'
     OPENAI_API_KEY: str = ""
     LLM_DECISION_ENABLED: bool = True
     CLASSIFIER_FAST_PATH: bool = True

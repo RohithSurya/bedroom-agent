@@ -16,6 +16,11 @@ class OpenAIClient:
     model: str
     api_key: str = ""
     timeout_s: float = 60.0
+    # Sent as chat_template_kwargs on every request. The default turns off thinking for
+    # Qwen-style templates; reasoning models may take e.g. {"reasoning_strength": "low"}.
+    chat_template_kwargs: dict[str, Any] = field(
+        default_factory=lambda: {"enable_thinking": False}
+    )
     _client: OpenAI = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -114,7 +119,7 @@ class OpenAIClient:
                 presence_penalty=1.5,
                 extra_body={
                     "top_k": 20,
-                    "chat_template_kwargs": {"enable_thinking": False},
+                    "chat_template_kwargs": self.chat_template_kwargs,
                 },
             )
 
@@ -133,7 +138,7 @@ class OpenAIClient:
                 return self._client.chat.completions.create(
                     **call_kwargs,
                     extra_body={
-                        "chat_template_kwargs": {"enable_thinking": False},
+                        "chat_template_kwargs": self.chat_template_kwargs,
                     },
                 )
             except Exception as exc:
