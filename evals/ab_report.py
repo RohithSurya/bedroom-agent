@@ -236,7 +236,7 @@ def main() -> int:
             print(f"Step {m['step']} @ t={m['now_s']}s intent={m['intent']}")
             for d in m["diffs"]:
                 if d["type"] == "decision":
-                    print(f"  - DECISION mismatch:")
+                    print("  - DECISION mismatch:")
                     print(
                         f"    shadow: {d['shadow']['decision']} ({d['shadow']['reason']})"
                     )
@@ -244,11 +244,11 @@ def main() -> int:
                         f"    active: {d['active']['decision']} ({d['active']['reason']})"
                     )
                 elif d["type"] == "actions":
-                    print(f"  - ACTIONS mismatch:")
+                    print("  - ACTIONS mismatch:")
                     print(f"    shadow: {d['shadow']}")
                     print(f"    active: {d['active']}")
                 elif d["type"] == "commits":
-                    print(f"  - COMMITS mismatch:")
+                    print("  - COMMITS mismatch:")
                     print(f"    shadow: {d['shadow']}")
                     print(f"    active: {d['active']}")
             print()

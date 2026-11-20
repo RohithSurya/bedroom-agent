@@ -1,74 +1,88 @@
-# EdgeAgent (aka bedroom-agent)
+# EdgeAgent (bedroom-agent)
 
-EdgeAgent (aka bedroom-agent) is a local-first embodied AI system for personalized room intelligence—combining multimodal perception, memory, and policy-gated action to safely control a real environment on edge hardware.
-Deployed on Jetson nano super.
+[![ci](https://github.com/RohithSurya/bedroom-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RohithSurya/bedroom-agent/actions/workflows/ci.yml)
+![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
-**Totally offline system deployed on [Jetson Orin Nano Super](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/nano-super-developer-kit/)**
+**An offline, multimodal AI agent that runs a real bedroom on an 8 GB NVIDIA Jetson Orin Nano Super.** It turns voice, sensors and a camera into lights, fan, AC and spoken replies through Home Assistant, with no cloud calls.
 
-The project is split into four pieces:
+🏆 **1st Prize, Mistral AI Worldwide Hackathon NYC + NVIDIA On-Device Track** (Feb 28 – Mar 1, 2026) · [announcement](https://www.linkedin.com/posts/rohithsurya_aiengineer-edgeai-multimodalai-ugcPost-7444515191498772480-uZbo) · [demo video](https://youtu.be/oJxBTXyXbbU)
 
-- `apps/bedroom-agent`: the FastAPI service that routes requests, evaluates policy, executes tools, listens to MQTT, and stores memory/logs
+## The idea: the LLM proposes, deterministic code decides
 
-- `infra/home-automation/ha_config`: Home Assistant configuration that exposes the agent to Assist and scripts
+A 3B model on an edge device is slow and sometimes wrong, so it never touches a device directly.
 
-- `wyoming`: speech-to-text using fast-whisper. Text to speech using piper.
+```
+voice / text / sensors
+  → Classifier     exact phrases → deterministic fast path (no LLM)
+                   anything else → LLM picks one of a fixed set of intents (JSON schema)
+  → Orchestrator   policy gates (presence, guest mode), cooldowns, idempotency keys
+  → Runner         timeouts, 1 retry on transient errors, circuit breaker, 12 s deadline
+  → Home Assistant → read the device back to verify → SQLite memory + JSONL audit log
+```
 
-- `Ministral 3B Instruct`: Quantized LLM running using llama.cpp (CUDA optimized)
+- **Worst case for a hallucination:** the model can pick an allowed, policy-gated intent. It can't invent a tool call, skip a policy or override a sensor. Presence comes from the mmWave sensor, never from the request.
+- **Shadow mode:** `AGENT_MODE=shadow` plans and logs everything without touching devices, so behaviour changes can be compared before they go live (`evals/ab_report.py`).
+- **Verify, don't trust:** every action is read back from the device. Across 718 real plans (Feb–Aug 2026), Home Assistant returned OK for 99% of calls, yet the read-back flagged 23% of plans as not matching the target state. Some were real device misses and some were verification timing. After settle-and-recheck reads went in (Mar 8), plan success rose from 66% to 84%.
 
+## By the numbers
 
-**LLM Stack**
+| | |
+|---|---|
+| Model | Ministral 3B Instruct (2512), 4-bit GGUF (2.15 GB) + vision projector (0.84 GB): about 3 GB on an 8 GB board |
+| Serving | llama.cpp with CUDA, flash attention, 2048-token context, all layers on the GPU (`-ngl 99`) |
+| Deterministic planning | ~0.1 ms per request, against seconds for an LLM call |
+| Tests | 114 unit tests + 15 scenario evals (cooldowns, guest mode, presence, retries, hard failures, idempotency, shadow vs active), all in CI |
 
-- This project uses [Ministral 3B Instruct (2512)](https://docs.mistral.ai/models/ministral-3-3b-25-12) as the core LLM.
+## What it does
 
-- Because the system runs on a Jetson Orin Nano Super with 8GB memory, the model is deployed in a [4-bit quantized GGUF](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF) format to fit within edge-device resource limits.
+- **Voice:** Home Assistant Assist (faster-whisper speech-to-text, Piper text-to-speech) and Siri via an Apple Home scene → `/agent/chat` → spoken reply on a HomePod.
+- **Sensors:** Zigbee door and mmWave presence sensors over MQTT drive "entering the room" and vacancy automations.
+- **Camera:** "is my desk messy?" runs a local vision analysis and caches the result.
+- **Memory:** beliefs, preferences and episodes in SQLite. Feedback like "too cold" or "warmer next time" updates sleep preferences.
+- **Intents:** `fan_on`, `fan_off`, `enter_room`, `sleep_mode`, `focus_start`, `focus_end`, `comfort_adjust`, `status`, `analyze_bedroom`, `no_action`.
 
-- The model is served locally using llama.cpp as a system service, with CUDA acceleration enabled on the Jetson for faster inference.
+## Timeline
 
-- To stay within the device’s memory and latency constraints, the model runs with a reduced context window of 2048 tokens and uses GPU layer offloading (`-ngl`) so computation is shared across the CPU and GPU.
+- **Feb 2026:** started as a sensor-driven room agent.
+- **Feb 28 – Mar 1:** hackathon build, with Ministral 3B served through Ollama. Won 1st Prize and the NVIDIA On-Device Track.
+- **Mar 2026:** hardening. Moved to llama.cpp with CUDA, added the reliability layer (retry, circuit breaker, deadline), verification fixes and the eval harness.
+- **Apr 2026:** a single classifier replaced the separate routers, and session memory and episode reflection were added.
 
-**Optimization Notes**
-- TensorRT-based optimization was explored to further improve performance and quantization efficiency.
+## Design trade-offs
 
-- However, because this project uses a multimodal vision + text workflow, TensorRT would require handling the vision and language components separately.
+- **llama.cpp over TensorRT:** the vision and language parts would have to be split into separate TensorRT pipelines. On 8 GB that added too much complexity for the gain.
+- **No KV-cache quantization:** a q4_0 KV cache made tool calls less reliable and increased hallucinations, so it was dropped.
+- **Small model on purpose:** larger models (for example Qwen3.5-4B) spilled into swap on the 8 GB board.
 
-- On an 8GB edge device, that split pipeline introduced too much complexity and was not practical for the current system design.
+## Hardware
 
-- For that reason, llama.cpp with CUDA offloading was chosen as the most feasible and reliable deployment path for this version of the project.
+- **Compute:** NVIDIA Jetson Orin Nano Super (8 GB)
+- **Zigbee:** Home Assistant Connect ZBT-2 coordinator, mmWave presence sensor, door sensors, smart plug, temperature/humidity sensor
+- **Climate:** Broadlink RM4 Mini IR blaster → window AC (SmartIR climate entity)
+- **Lights:** smart plug for the bedside lamp, SwitchBot for the ceiling light
+- **Audio:** HomePod (text-to-speech output)
+- **Camera:** USB camera for room analysis
 
+## Try it locally (no Home Assistant, broker or GPU needed)
 
-**Services running for the project**
-- Bedroom-agent microservice (Brain of the project)
-- [ministral-3b-2512](https://docs.mistral.ai/models/ministral-3-3b-25-12) LLM model
-- Zigbee2MQTT
-- Mosquitto (Message queue)
-- Home assistant
-- Wyoming (For speech to text)
-- Piper (For text to speech)
+```bash
+cd apps/bedroom-agent
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
 
+TOOL_BACKEND=local MQTT_ENABLED=false VISION_ANALYSIS_ENABLED=false \
+  uvicorn src.app:app --port 9000
 
-**Hardware + ecosystem**
+curl -s -X POST localhost:9000/agent/chat -H 'Content-Type: application/json' \
+  -d '{"text": "turn the fan on"}'
+```
 
-**Compute**
+With no presence sensor connected, the policy gate denies the request and explains why ("Fan blocked: I don't detect anyone in the room."). That's the safety layer working. The scenario evals simulate sensor states:
 
-- **NVIDIA Jetson Orin Nano 8GB**
-
-**Sensors + control**
-
-- **Camera** -> to feed photos to the local Ministral model backend
-- **mmWave presence sensor** (Zigbee) → presence/occupancy belief state
-- **Zigbee smart plug** → bedside lamp + power telemetry use-cases
-- **Home Assistant Connect ZBT-2** (Zigbee coordinator, run in **Zigbee mode** for v1.0)
-- **Broadlink RM4 Mini (IR blaster)** → controls **Vissani window AC**
-- **Home Assistant + SmartIR climate entity** → reliable HVAC abstraction
-- **HomePod Gen2** → TTS output + temp/humidity sensor (as available in Home ecosystem)
-- **Door Sensor** → For tracking door in and out events and also used for presence tracking
-- **Temperature and Humidity Sensor** → Monitors the temperature and humidity of the room. Adjusting comfort mode based on temperature and humidity.
-- **Switch bot** → Switch bot to control dome light in the room. Making a dumb light into a smart one.
-
-**Voice control path (locked Option 1)**
-
-- **HomePod Siri → Apple Home Scene → Home Assistant → LLM/Agent → HomePod speaks**
-- **Homeassistant assist** → Works with voice assist with Tony open wake word (Using apple shortcuts). Relays commands to `/agent/chat` making it a seamless experience.
+```bash
+ruff check src tests ../../evals && pytest tests     # from apps/bedroom-agent
+python ../../evals/run_all.py                        # 15/15 scenarios
+```
 
 ## Visual Overview
 
@@ -92,7 +106,7 @@ flowchart LR
   subgraph Agent["bedroom-agent FastAPI service"]
     API["FastAPI app\n/health /agent/run /agent/chat"]
     State["Runtime state builder"]
-    Router["NLRouter"]
+    Router["Classifier"]
     Status["StatusService"]
     Decision["DecisionEngine"]
     Vision["BedroomRoomAnalyzer"]
@@ -114,7 +128,7 @@ flowchart LR
   subgraph Inputs["External inputs"]
     Broker["MQTT broker / Zigbee2MQTT"]
     Camera["BedroomImageSource\nfswebcam / HA snapshot / file"]
-    Model["LLM provider\nOllama or Mistral API"]
+    Model["LLM provider\nllama.cpp (OpenAI-compatible API)"]
     Whisper["Wyoming / faster-whisper"]
     Piper["Wyoming / piper-tts"]
   end
@@ -195,7 +209,7 @@ flowchart LR
     end
 
     subgraph Routing[Routing and Interpretation]
-        Router["NLRouter"]
+        Router["Classifier"]
         Decision["DecisionEngine"]
         Status["StatusService"]
         Vision["BedroomRoomAnalyzer"]
@@ -371,7 +385,7 @@ flowchart TD
   subgraph Runtime["Runtime context"]
     Tiered["TieredMemory\nrelevant prefs + episode summary"]
     StatePacket["build_runtime_state()\nstate packet for routing and policy"]
-    Services["NLRouter / StatusService /\nDecisionEngine / Orchestrator"]
+    Services["Classifier / StatusService /\nDecisionEngine / Orchestrator"]
     VisionSvc["BedroomRoomAnalyzer"]
     Feedback["PreferenceFeedback"]
     EpisodesWriter["record_episode()"]
@@ -572,27 +586,9 @@ flowchart LR
     H --> I[Return summary or exact answer]
 ```
 
-## Quick Start
+## Running against a mock Home Assistant
 
-Install the service:
-
-```bash
-cd apps/bedroom-agent
-python -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -e ".[dev]"
-```
-
-Run the agent in fully local mode:
-
-```bash
-TOOL_BACKEND=local \
-VISION_ANALYSIS_ENABLED=false \
-uvicorn src.app:app --host 0.0.0.0 --port 9000 --reload
-```
-
-Optional: run the mock Home Assistant service from the repo root:
+From the repo root, start the mock:
 
 ```bash
 python -m uvicorn mock_ha.app:app --host 0.0.0.0 --port 8124 --reload
@@ -602,9 +598,8 @@ Then point the agent at it:
 
 ```bash
 cd apps/bedroom-agent
-TOOL_BACKEND=http \
-HA_BASE_URL=http://127.0.0.1:8124 \
-VISION_ANALYSIS_ENABLED=false \
+TOOL_BACKEND=http HA_BASE_URL=http://127.0.0.1:8124 \
+MQTT_ENABLED=false VISION_ANALYSIS_ENABLED=false \
 uvicorn src.app:app --host 0.0.0.0 --port 9000 --reload
 ```
 
@@ -648,7 +643,7 @@ curl -X POST http://127.0.0.1:9000/agent/chat \
 
 ## Configuration
 
-The authoritative settings live in [apps/bedroom-agent/src/core/config.py](/home/rosurya/bedroom-agent/apps/bedroom-agent/src/core/config.py).
+The authoritative settings live in [apps/bedroom-agent/src/core/config.py](apps/bedroom-agent/src/core/config.py).
 
 Common variables:
 
@@ -657,7 +652,8 @@ Common variables:
 - `HA_BASE_URL`, `HA_TOKEN`
 - `LLM_BASE_URL`, `LLM_MODEL`, `OPENAI_API_KEY`
 - `LLM_DECISION_ENABLED`, `LLM_DECISION_TIMEOUT_S`, `LLM_DECISION_MIN_CONFIDENCE`
-- `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, `Z2M_PRESENCE_TOPIC`
+- `CLASSIFIER_FAST_PATH` (deterministic phrase routing before the LLM), `TOOL_RETRY_MAX_ATTEMPTS`
+- `MQTT_ENABLED`, `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, `Z2M_PRESENCE_TOPIC`
   `Z2M_DOOR_TOPIC` can be a comma-separated list when multiple door sensors should share the same entry logic.
 - `SQLITE_PATH`
 - `CAMERA_MODE=device|ha_snapshot|file`
@@ -665,13 +661,14 @@ Common variables:
 
 ## Verification
 
-From `apps/bedroom-agent`:
+From `apps/bedroom-agent` (the same checks run in CI on every push and pull request):
 
 ```bash
-./.venv/bin/ruff check src tests
-./.venv/bin/pytest tests -q
+ruff check src tests ../../evals
+pytest tests
+python ../../evals/run_all.py
 ```
 
 ## More Detail
 
-Service-specific docs are in [apps/bedroom-agent/README.md](/apps/bedroom-agent/README.md).
+Service-specific docs are in [apps/bedroom-agent/README.md](apps/bedroom-agent/README.md).

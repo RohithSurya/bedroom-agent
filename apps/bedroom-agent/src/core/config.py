@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_S: float = 60.0
     OPENAI_API_KEY: str = ""
     LLM_DECISION_ENABLED: bool = True
+    CLASSIFIER_FAST_PATH: bool = True
+    TOOL_RETRY_MAX_ATTEMPTS: int = 2  # total attempts: 1 try + 1 retry
     LLM_DECISION_MIN_CONFIDENCE: float = 0.55
     LLM_DECISION_TIMEOUT_S: float = 20.0
     LLM_DECISION_USE_VISION: bool = True
@@ -29,6 +31,7 @@ class Settings(BaseSettings):
     SQLITE_PATH: str = "data/memory.sqlite"
 
     # MQTT (Zigbee2MQTT)
+    MQTT_ENABLED: bool = True  # false: run without a broker (local dev, demos)
     MQTT_HOST: str = "host.docker.internal"
     MQTT_PORT: int = 1883
     MQTT_USERNAME: str | None = None

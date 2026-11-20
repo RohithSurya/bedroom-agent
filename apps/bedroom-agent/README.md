@@ -117,7 +117,7 @@ Key memory components:
 
 ## Configuration
 
-Settings are loaded from `.env` with `pydantic-settings`. The source of truth is [src/core/config.py](/home/rosurya/bedroom-agent/apps/bedroom-agent/src/core/config.py).
+Settings are loaded from `.env` with `pydantic-settings`. The source of truth is [src/core/config.py](src/core/config.py).
 
 Important variables:
 

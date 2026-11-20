@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from agent.intent_registry import CLASSIFIER_INTENTS, CLASSIFIER_SCHEMA
 from llm.base import LLMClient
 from memory.sqlite_kv import SqliteKV
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,9 @@ class Classifier:
 
     llm: Optional[LLMClient] = None
     kv: Optional[SqliteKV] = None
+    # Deterministic feedback detection + phrase fast-path before the LLM. Turn off
+    # (CLASSIFIER_FAST_PATH=false) to route every utterance through the LLM.
+    fast_path: bool = True
 
     def classify(
         self,
@@ -135,15 +141,16 @@ class Classifier:
     ) -> Classification:
         t = (text or "").strip().lower()
 
-        # # 1. Feedback detection
-        # feedback = self._detect_feedback(t)
-        # if feedback is not None:
-        #     return feedback
+        if self.fast_path:
+            # 1. Feedback detection
+            feedback = self._detect_feedback(t)
+            if feedback is not None:
+                return feedback
 
-        # # 2. Deterministic fast-path
-        # fast = self._fast_path(t, text)
-        # if fast is not None:
-        #     return fast
+            # 2. Deterministic fast-path
+            fast = self._fast_path(t, text)
+            if fast is not None:
+                return fast
 
         # 3. LLM fallback
         if self.llm is not None:
@@ -257,13 +264,13 @@ class Classifier:
                 prompt += "Recent conversation:\n" + "\n".join(history_lines) + "\n\n"
 
         prompt += f'User text: {text!r}\nReturn: {{"intent": ..., "args": {{...}}}}\n'
-        print(prompt)
+        log.debug("classifier prompt: %s", prompt)
 
         try:
             out = self.llm.generate_json(prompt=prompt, schema=CLASSIFIER_SCHEMA, temperature=0.0)
         except Exception:
             return None
-        print(out)
+        log.debug("classifier output: %s", out)
         intent = out.get("intent")
         args = out.get("args") if isinstance(out.get("args"), dict) else {}
 

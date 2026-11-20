@@ -26,7 +26,9 @@ class Runner:
         )
     )
     retry_attempts: int = 1  # v0 default
-    tool_retry_policy: RetryPolicy = field(default_factory=lambda: RetryPolicy(max_attempts=1))
+    # One retry (2 attempts total) for transient failures (timeouts, 502/503/504, HA
+    # unreachable) on retryable tools, with exponential backoff + jitter inside the deadline.
+    tool_retry_policy: RetryPolicy = field(default_factory=lambda: RetryPolicy(max_attempts=2))
     tool_timeout_s: float = 8.0  # extra safety, especially for HTTP/HA
     verification_settle_attempts: int = 5
     verification_settle_delay_s: float = 0.2
@@ -63,7 +65,7 @@ class Runner:
             return True
         if "timeout" in err or "unreachable" in err:
             return True
-        if err in ("ha_unreachable", "simulated_timeout", "simulated_error"):
+        if err in ("ha_unreachable", "simulated_timeout"):
             return True
         return False
 
