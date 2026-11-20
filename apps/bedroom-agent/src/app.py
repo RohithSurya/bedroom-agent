@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import json
 import time
 import requests
 from typing import Any, Literal
@@ -86,6 +87,7 @@ class AgentAppState:
                 timeout_s=timeout_s,
                 base_url=settings.LLM_BASE_URL,
                 openai_api_key=settings.OPENAI_API_KEY,
+                chat_template_kwargs=json.loads(settings.LLM_CHAT_TEMPLATE_KWARGS or "{}"),
             )
 
         # Optional LLM backend (local on-device). If it isn't running, routing falls back safely.

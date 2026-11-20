@@ -650,7 +650,7 @@ Common variables:
 - `AGENT_MODE=shadow|active`
 - `TOOL_BACKEND=local|http|ha`
 - `HA_BASE_URL`, `HA_TOKEN`
-- `LLM_BASE_URL`, `LLM_MODEL`, `OPENAI_API_KEY`
+- `LLM_BASE_URL`, `LLM_MODEL`, `OPENAI_API_KEY`, `LLM_CHAT_TEMPLATE_KWARGS` (JSON, e.g. `{"reasoning_strength": "low"}` for reasoning models)
 - `LLM_DECISION_ENABLED`, `LLM_DECISION_TIMEOUT_S`, `LLM_DECISION_MIN_CONFIDENCE`
 - `CLASSIFIER_FAST_PATH` (deterministic phrase routing before the LLM), `TOOL_RETRY_MAX_ATTEMPTS`
 - `MQTT_ENABLED`, `MQTT_HOST`, `MQTT_PORT`, `Z2M_DOOR_TOPIC`, `Z2M_PRESENCE_TOPIC`
