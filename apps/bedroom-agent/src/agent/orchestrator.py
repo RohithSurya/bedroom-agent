@@ -255,6 +255,7 @@ INTENT_TABLE: dict[str, IntentPlan] = {
         policy_fn=evaluate_sleep_mode,
         build_actions=_build_sleep_mode,
         cooldown_key_template="intent:sleep_mode:room:bedroom",
+        speech_on_deny="Sleep mode blocked: {reason}",
     ),
     "focus_start": IntentPlan(
         policy_fn=evaluate_focus_start,

@@ -105,3 +105,11 @@ def test_classifier_ambiguous_falls_to_status_without_llm():
     r = c.classify(text="What should happen now?", state={})
     # No longer a special intent — just falls through to status
     assert r.intent == "status"
+
+
+def test_classifier_fast_path_can_be_disabled():
+    # With the fast path off and no LLM, even an exact phrase falls back to status.
+    c = Classifier(llm=None, fast_path=False)
+    r = c.classify(text="turn the fan on")
+    assert r.intent == "status"
+    assert r.source == "fallback"

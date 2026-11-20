@@ -29,6 +29,7 @@ from tools.ha_real_client import HAToolClientReal
 from vision.image_source import BedroomImageSource
 from vision.room_analyzer import BedroomRoomAnalyzer
 from reliability.deadline import Deadline
+from reliability.retry import RetryPolicy
 from memory.tiered_memory import TieredMemory
 from memory.preference_feedback import PreferenceFeedback
 from memory.reflection import EpisodeReflector
@@ -95,7 +96,9 @@ class AgentAppState:
             else None
         )
         self.kv = SqliteKV(settings.SQLITE_PATH)
-        self.classifier = Classifier(llm=self.llm, kv=self.kv)
+        self.classifier = Classifier(
+            llm=self.llm, kv=self.kv, fast_path=self.settings.CLASSIFIER_FAST_PATH
+        )
         self.session_store = SessionStore(kv=self.kv)
         self.memory = TieredMemory(kv=self.kv)
         self.preference_feedback = PreferenceFeedback(kv=self.kv)
@@ -133,6 +136,7 @@ class AgentAppState:
             executor=_build_executor(settings, logger=self.logger),
             cooldowns=cooldowns,
             logger=self.logger,
+            tool_retry_policy=RetryPolicy(max_attempts=int(settings.TOOL_RETRY_MAX_ATTEMPTS)),
         )
 
         self.mqtt = Z2MMqttListener(
